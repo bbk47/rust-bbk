@@ -1,3 +1,5 @@
+use std::io::BufReader;
+use std::io::BufWriter;
 use std::io::Read;
 use std::io::Write;
 use std::net::TcpStream;
@@ -31,14 +33,16 @@ impl BbkClient {
         };
 
         println!("Successfully connected to server in port {}", &addr);
-        let mstream = Arc::new(Mutex::new(stream));
-        let stream2 = Arc::clone(&mstream);
+        let stream_clone = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut writer = BufWriter::new(stream_clone);
 
         thread::spawn(move || loop {
             let hellobytes = "hello server i client!".as_bytes();
-            println!("lock spawn....");
+            // println!("write spawn....");
             {
-                let ret = stream2.lock().unwrap().write(&hellobytes);
+                let ret = writer.write(&hellobytes);
+                writer.flush().unwrap();
                 if let Err(e) = ret {
                     println!("write err:{}", e);
                     return;
@@ -46,17 +50,15 @@ impl BbkClient {
                 if let Ok(s) = ret {
                     println!("write size:{}", s);
                 }
+                
             }
-            thread::sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(1000));
         });
         loop {
-            println!("read====");
-            thread::sleep(Duration::from_millis(1));
             let mut buffer = [0; 1024];
             {
-                println!("====lock====");
-                mstream.lock().unwrap().read(&mut buffer).unwrap();
-                println!("Get Msg: {}", String::from_utf8_lossy(&buffer[..]));
+                reader.read(&mut buffer).unwrap();
+                println!("Get Msg from server: {}", String::from_utf8_lossy(&buffer[..]));
             }
         }
     }

@@ -1,3 +1,6 @@
+use std::io::BufRead;
+use std::io::BufReader;
+use std::io::BufWriter;
 use std::io::Read;
 use std::io::Write;
 use std::net::TcpListener;
@@ -21,15 +24,17 @@ impl BbkServer {
 
         let hellobytes = "hello client i server!".as_bytes();
         for stream in listener.incoming() {
-            let mut stream = stream.unwrap();
+            let st = stream.unwrap();
+            let stream_clone = st.try_clone().unwrap();
+            let mut reader = BufReader::new(st);
+            let mut writer = BufWriter::new(stream_clone);
             thread::spawn(move || loop {
                 let mut buffer = [0; 1024];
-                let size = stream.read(&mut buffer).unwrap();
-                // println!("size {}", size);
-                println!("Get Msg: {}", String::from_utf8_lossy(&buffer[..size]));
-                // stream.write(hellobytes).unwrap()
+                let size = reader.read(&mut buffer).unwrap();
+                println!("Get Msg from client: {}", String::from_utf8_lossy(&buffer[..size]));
+                writer.write(hellobytes).unwrap();
+                writer.flush().unwrap();
             });
-            println!("Connection established!");
         }
     }
 }
