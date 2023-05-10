@@ -4,9 +4,9 @@ use option::BbkSerOption;
 use regex::Regex;
 use std::fs;
 
-mod client;
-mod option;
-mod server;
+use client;
+use option;
+use server;
 
 /// bbk is a tunnel for bypass firewall
 #[derive(Parser, Debug)]
@@ -23,6 +23,10 @@ fn main() {
         println!("config file is missing!");
         return;
     }
+    // let s = String::from("hello world");
+
+    // let hello = &s[0..5];
+    // let world = &s[6..11];
     let fscontent = match fs::read_to_string(&args.config) {
         Ok(ret) => ret,
         Err(e) => panic!("read config file  failed: {:?}", e),

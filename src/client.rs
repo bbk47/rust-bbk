@@ -3,7 +3,6 @@ use std::io::BufWriter;
 use std::io::Read;
 use std::io::Write;
 use std::net::TcpStream;
-use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
