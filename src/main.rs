@@ -1,13 +1,10 @@
 use clap::Parser;
-use option::BbkCliOption;
-use option::BbkSerOption;
 use regex::Regex;
 use std::fs;
 
-use client;
-use option;
-use server;
-
+mod client;
+mod option;
+mod server;
 /// bbk is a tunnel for bypass firewall
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -40,13 +37,13 @@ fn main() {
     let retstr = m.as_str();
     let mode = &retstr[9..];
     if mode == "client" {
-        let bbkopts: BbkCliOption = serde_json::from_str(&fscontent).unwrap();
+        let bbkopts: option::BbkCliOption = serde_json::from_str(&fscontent).unwrap();
         let jsonstr = serde_json::to_string_pretty(&bbkopts).unwrap();
         println!("bbkopts:\n{}!", jsonstr);
         let cli = client::BbkClient::new(bbkopts);
         cli.bootstrap()
     } else {
-        let bbkopts: BbkSerOption = serde_json::from_str(&fscontent).unwrap();
+        let bbkopts: option::BbkSerOption = serde_json::from_str(&fscontent).unwrap();
         let jsonstr = serde_json::to_string_pretty(&bbkopts).unwrap();
         println!("bbkopts:\n{}!", jsonstr);
         let svc = server::BbkServer::new(bbkopts);

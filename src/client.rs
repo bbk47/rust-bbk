@@ -49,7 +49,6 @@ impl BbkClient {
                 if let Ok(s) = ret {
                     println!("write size:{}", s);
                 }
-                
             }
             thread::sleep(Duration::from_millis(1000));
         });
