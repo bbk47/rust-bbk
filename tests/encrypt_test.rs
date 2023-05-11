@@ -16,6 +16,7 @@ fn test_encrypt_decrypt() {
         let mut encryptor = Encryptor::new(method, password);
         let mut ciphertext = input.to_vec();
         encryptor.encrypt(&mut ciphertext);
+        println!("method:{},ciphertext:{}",method,hex::encode(&ciphertext));
     
         let mut decryptor = Encryptor::new(method, password);
         let mut plaintext = ciphertext.clone();
