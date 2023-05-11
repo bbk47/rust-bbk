@@ -8,7 +8,9 @@ use std::io::Write;
 use std::net::TcpListener;
 use std::thread;
 
-use crate::BbkSerOption;
+
+use crate::option::BbkSerOption;
+
 
 pub struct BbkServer {
     opts: BbkSerOption,

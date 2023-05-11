@@ -6,8 +6,7 @@ use std::net::TcpStream;
 use std::thread;
 use std::time::Duration;
 
-use crate::BbkCliOption;
-
+use crate::option::BbkCliOption;
 pub struct BbkClient {
     opts: BbkCliOption,
 }
