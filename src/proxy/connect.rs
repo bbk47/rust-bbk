@@ -1,7 +1,15 @@
-use std::io::{self, BufRead, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::io::{self, Read, Write, BufReader};
+use std::net::TcpStream;
+use std::error::Error;
 
-struct ConnectProxy {
+pub trait ProxySocket {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize>;
+    fn close(&mut self) -> io::Result<()>;
+    fn get_addr(&self) -> &[u8];
+}
+
+pub struct ConnectProxy {
     addr_buf: Vec<u8>,
     conn: TcpStream,
 }
@@ -16,38 +24,44 @@ impl ProxySocket for ConnectProxy {
     }
 
     fn close(&mut self) -> io::Result<()> {
-        self.conn.shutdown(std::net::Shutdown::Both)?;
-        Ok(())
+        self.conn.shutdown(std::net::Shutdown::Both)
     }
 
     fn get_addr(&self) -> &[u8] {
-        &self.addr_buf
+        &self.addr_buf[..]
     }
 }
 
-fn new_connect_proxy(addr: impl ToSocketAddrs) -> io::Result<ConnectProxy> {
-    let mut buf = String::new();
-    let mut conn = TcpStream::connect(addr)?;
+pub fn new_connect_proxy(mut conn: TcpStream) -> Result<ConnectProxy, Box<dyn Error>> {
+    let mut buf_reader = BufReader::new(&mut conn);
+    let mut buf = Vec::new();
 
-    // 1. receive CONNECT request..
-    let mut rd = io::BufReader::new(conn.try_clone()?);
-    rd.read_line(&mut buf)?;
-    let words: Vec<&str> = buf.trim().split(' ').collect();
+    // read CONNECT request
+    let mut line_buf = String::new();
+    buf_reader.read_line(&mut line_buf)?;
+    let words: Vec<&str> = line_buf.split_whitespace().collect();
     if words.len() < 2 || words[0] != "CONNECT" {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("invalid CONNECT request: {}", buf),
-        ));
+        return Err("CONNECT token mismatch!".into());
     }
-
-    conn.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")?;
-
     let chost = words[1];
-    // 3. sends a HEADERS frame containing a 2xx series status code to the client, as defined in [RFC7231], Section 4.3.6
-    let res1: Vec<&str> = chost.split(':').collect();
-    let hostname = res1[0];
-    let port = res1[1];
 
-    let addr_buf = toolbox::build_socks5_addr_data(hostname, port)?;
-    Ok(ConnectProxy { addr_buf, conn })
+    // sends a OK response
+    conn.write_all(b"HTTP/1.1 200 OK\r\n\r\n")?;
+
+    // parse host and port
+    let (hostname, port) = {
+        let parts: Vec<&str> = chost.split(':').collect();
+        if parts.len() != 2 {
+            return Err("invalid address".into());
+        }
+        (parts[0], parts[1])
+    };
+
+    // build socks5 address data
+    let addr_data = toolbox::build_socks5_addr_data(hostname, port)?;
+    let s = ConnectProxy {
+        addr_buf: addr_data,
+        conn,
+    };
+    Ok(s)
 }

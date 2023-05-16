@@ -1,6 +1,6 @@
 use std::net::{TcpListener, TcpStream};
 
-struct ProxyServer {
+pub struct ProxyServer {
     addr: String,
     ln: TcpListener,
 }
@@ -22,7 +22,7 @@ impl ProxyServer {
     }
 }
 
-fn new_proxy_server(host: &str, port: u16) -> std::io::Result<ProxyServer> {
+pub fn new_proxy_server(host: &str, port: u16) -> std::io::Result<ProxyServer> {
     let address = format!("{}:{}", host, port);
     let listener = TcpListener::bind(address)?;
     let addr_str = format!("tcp://{}", listener.local_addr()?);
