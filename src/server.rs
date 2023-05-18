@@ -1,44 +1,57 @@
-mod http2;
-mod websocket;
-
-use std::io::BufReader;
-use std::io::BufWriter;
-use std::io::Read;
-use std::io::Write;
-use std::net::TcpListener;
-use std::thread;
-
-
 use crate::option::BbkSerOption;
-
+use crate::serve;
+use crate::serve::{FrameServer, TunnelConn};
+use crate::utils::logger::{LogLevel, Logger};
+use std::error::Error;
 
 pub struct BbkServer {
     opts: BbkSerOption,
+    logger: Logger,
 }
 
 impl BbkServer {
     pub fn new(opts: BbkSerOption) -> Self {
         println!("server new====");
-        BbkServer { opts: opts }
+        let logger = Logger::new(LogLevel::Info);
+        BbkServer { opts: opts, logger }
     }
 
-    pub fn bootstrap(&self) {
-        let addr = format!("{}:{}", self.opts.listen_addr, self.opts.listen_port);
-        let listener = TcpListener::bind(&addr).unwrap();
+    pub fn handle_connection(&self, conn: &TunnelConn) -> Result<(), Box<dyn Error>> {
+        // Handle connection logic here.
+        // println!("Received a connection from {}", tunnel_conn.tcp_socket.peer_addr().unwrap());
+        Ok(())
+    }
 
-        let hellobytes = "hello client i server!".as_bytes();
-        for stream in listener.incoming() {
-            let st = stream.unwrap();
-            let stream_clone = st.try_clone().unwrap();
-            let mut reader = BufReader::new(st);
-            let mut writer = BufWriter::new(stream_clone);
-            thread::spawn(move || loop {
-                let mut buffer = [0; 1024];
-                let size = reader.read(&mut buffer).unwrap();
-                println!("Get Msg from client: {}", String::from_utf8_lossy(&buffer[..size]));
-                writer.write(hellobytes).unwrap();
-                writer.flush().unwrap();
-            });
+    fn init_server(&self) {
+        if self.opts.listen_port <= 1024 && self.opts.listen_port >= 65535 {
+            panic!("invalid port: {}", self.opts.listen_port);
         }
+        let port = self.opts.listen_port as u16;
+        let addr = format!("{}:{}", &self.opts.listen_addr, &port);
+        let server = match &self.opts.work_mode[..] {
+            "tcp" => serve::new_abc_tcp_server(&self.opts.listen_addr, port),
+            // "tls" => serve::new_abc_tls_server(&addr, &self.opts.listen_port, &self.opts.ssl_crt, &self.opts.ssl_key),
+            // "ws" => server::new_abc_wss_server(&addr, &self.opts.work_path),
+            // "h2" => server::new_abc_http2_server(&addr, &self.opts.work_path, &self.opts.ssl_crt, &self.opts.ssl_key),
+            _ => {
+                self.logger.info(&format!("unsupported work mode: {}", &self.opts.work_mode));
+                Err("unsupported work mode".into())
+            }
+        }
+        .unwrap();
+        self.logger.info(&format!("server listen on {:?}", server.get_addr()));
+        // server.listen_conn(|t: &TunnelConn| self.handle_connection(t));
+        server .listen_conn(|tunnel_conn| {
+            println!("Received a connection from {}", tunnel_conn.tcp_socket.peer_addr().unwrap());
+        }).unwrap();
+    }
+
+    // fn init_serizer(&self) -> Result<Serializer, Box<dyn Error>> {
+    //     Serializer::new(&self.opts.method, &self.opts.password)
+    //         .map_err(|e| -> Box<dyn Error> { Box::new(e) })
+    // }
+
+    pub fn bootstrap(&self) {
+        self.init_server();
     }
 }

@@ -71,7 +71,8 @@ pub fn new_socks5_proxy(mut conn: TcpStream) -> Result<Socks5Proxy, Box<dyn Erro
         0x03 => {
             // domain name
             let domain_len = read_byte(&mut conn)?;
-            conn.read_exact(&mut buf[0..(domain_len + 2)])?;
+            let len = (2+domain_len) as usize;
+            conn.read_exact(&mut buf[0..(len)])?;
             domain_len as usize + 2 + 1 // domain name + port + NAMETYPE
         }
         _ => return Err("invalid ATYP".into()),

@@ -2,9 +2,15 @@ use clap::Parser;
 use regex::Regex;
 use std::fs;
 
+// 目录模块
+mod proxy;
+mod serve;
+mod utils;
+// 文件模块
 mod client;
 mod option;
 mod server;
+
 /// bbk is a tunnel for bypass firewall
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

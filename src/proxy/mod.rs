@@ -1,12 +1,15 @@
 use std::net::{TcpListener, TcpStream};
 
+pub mod connect;    // 查找当前目录下的connect.rs或者connect目录下的mod.rs
+pub mod socks5;    // 查找当前目录下的socks5.rs或者socks5目录下的mod.rs
+
 pub struct ProxyServer {
     addr: String,
     ln: TcpListener,
 }
 
 impl ProxyServer {
-    fn listen_conn<F>(&self, mut handler: F)
+    pub fn listen_conn<F>(&self, mut handler: F)
     where
         F: FnMut(TcpStream),
     {
@@ -17,7 +20,7 @@ impl ProxyServer {
         }
     }
 
-    fn get_addr(&self) -> &str {
+   pub fn get_addr(&self) -> &str {
         &self.addr
     }
 }

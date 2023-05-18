@@ -1,6 +1,9 @@
 use std::io::{self, Read, Write, BufReader};
+use std::io::BufRead;
 use std::net::TcpStream;
 use std::error::Error;
+
+use crate::utils;
 
 pub trait ProxySocket {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
@@ -33,8 +36,8 @@ impl ProxySocket for ConnectProxy {
 }
 
 pub fn new_connect_proxy(mut conn: TcpStream) -> Result<ConnectProxy, Box<dyn Error>> {
-    let mut buf_reader = BufReader::new(&mut conn);
-    let mut buf = Vec::new();
+    let mut buf_reader: BufReader<&mut TcpStream> = BufReader::new(&mut conn);
+    let mut buf: Vec<u8> = Vec::new();
 
     // read CONNECT request
     let mut line_buf = String::new();
@@ -57,8 +60,9 @@ pub fn new_connect_proxy(mut conn: TcpStream) -> Result<ConnectProxy, Box<dyn Er
         (parts[0], parts[1])
     };
 
+    let port: u16 = port.parse().unwrap();
     // build socks5 address data
-    let addr_data = toolbox::build_socks5_addr_data(hostname, port)?;
+    let addr_data = utils::socks5::build_socks5_address_data(hostname, port)?;
     let s = ConnectProxy {
         addr_buf: addr_data,
         conn,

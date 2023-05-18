@@ -1,15 +1,53 @@
-use std::fs::File;
-use std::io::{self, BufWriter, Write};
+use std::cmp::Ordering;
+use std::io::{self, Write};
 use std::sync::Mutex;
 
-enum LogLevel {
+#[derive(PartialEq, Eq)]
+pub enum LogLevel {
     Debug,
     Info,
     Warn,
     Error,
 }
 
-struct Logger {
+
+
+impl PartialOrd for LogLevel {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (&LogLevel::Error, &LogLevel::Error) => Some(Ordering::Equal),
+            (&LogLevel::Error, _) => Some(Ordering::Greater),
+            (_, &LogLevel::Error) => Some(Ordering::Less),
+            (&LogLevel::Warn, &LogLevel::Warn) => Some(Ordering::Equal),
+            (&LogLevel::Warn, _) => Some(Ordering::Greater),
+            (_, &LogLevel::Warn) => Some(Ordering::Less),
+            (&LogLevel::Info, &LogLevel::Info) => Some(Ordering::Equal),
+            (&LogLevel::Info, _) => Some(Ordering::Greater),
+            (_, &LogLevel::Info) => Some(Ordering::Less),
+            (&LogLevel::Debug, &LogLevel::Debug) => Some(Ordering::Equal),
+        }
+    }
+}
+
+impl Ord for LogLevel {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (&LogLevel::Error, &LogLevel::Error) 
+            | (&LogLevel::Warn, &LogLevel::Warn)
+            | (&LogLevel::Info, &LogLevel::Info)
+            | (&LogLevel::Debug, &LogLevel::Debug) => Ordering::Equal,
+            (&LogLevel::Error, _) => Ordering::Greater,
+            (_, &LogLevel::Error) => Ordering::Less,
+            (&LogLevel::Warn, &LogLevel::Info) 
+            | (&LogLevel::Warn, &LogLevel::Debug) 
+            | (&LogLevel::Info, &LogLevel::Debug) => Ordering::Greater,
+            (_, _) => Ordering::Less,
+        }
+    }
+}
+
+
+pub struct Logger {
     level: LogLevel,
     writer: Mutex<Box<dyn Write + Send>>,
 }

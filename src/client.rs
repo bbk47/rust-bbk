@@ -1,12 +1,11 @@
-use std::io::BufReader;
-use std::io::BufWriter;
-use std::io::Read;
-use std::io::Write;
-use std::net::TcpStream;
-use std::thread;
-use std::time::Duration;
+
+use std::println;
+
+use crate::proxy;
 
 use crate::option::BbkCliOption;
+use crate::proxy::socks5::ProxySocket;
+
 pub struct BbkClient {
     opts: BbkCliOption,
 }
@@ -22,41 +21,19 @@ impl BbkClient {
             Some(tp) => tp,
             None => panic!("missing tunnelOpts config"),
         };
-        let addr = format!("{}:{}", tunopts.host, tunopts.port);
-        let stream = match TcpStream::connect(&addr) {
-            Ok(stream) => stream,
-            Err(e) => {
-                panic!("Failed to connect: {}", e);
-            }
-        };
-
-        println!("Successfully connected to server in port {}", &addr);
-        let stream_clone = stream.try_clone().unwrap();
-        let mut reader = BufReader::new(stream);
-        let mut writer = BufWriter::new(stream_clone);
-
-        thread::spawn(move || loop {
-            let hellobytes = "hello server i client!".as_bytes();
-            // println!("write spawn....");
-            {
-                let ret = writer.write(&hellobytes);
-                writer.flush().unwrap();
-                if let Err(e) = ret {
-                    println!("write err:{}", e);
-                    return;
-                }
-                if let Ok(s) = ret {
-                    println!("write size:{}", s);
-                }
-            }
-            thread::sleep(Duration::from_millis(1000));
-        });
-        loop {
-            let mut buffer = [0; 1024];
-            {
-                reader.read(&mut buffer).unwrap();
-                println!("Get Msg from server: {}", String::from_utf8_lossy(&buffer[..]));
-            }
+        if self.opts.listen_port <= 1024 && self.opts.listen_port >= 65535 {
+            panic!("invalid port: {}", self.opts.listen_port);
         }
+        let port = self.opts.listen_port as u16;
+
+        let proxy_server = proxy::new_proxy_server(&self.opts.listen_addr, port).unwrap();
+        println!("Proxy server listening on {}", proxy_server.get_addr());
+
+        proxy_server.listen_conn(|stream| {
+            // Handle incoming connections here
+            let socketproxy = proxy::socks5::new_socks5_proxy(stream).unwrap();
+            let addr = socketproxy.get_addr();
+            println!("=====await connect")
+        });
     }
 }
