@@ -4,13 +4,7 @@ use std::net::TcpStream;
 use std::error::Error;
 
 use crate::utils;
-
-pub trait ProxySocket {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize>;
-    fn close(&mut self) -> io::Result<()>;
-    fn get_addr(&self) -> &[u8];
-}
+use super::base::ProxySocket;
 
 pub struct ConnectProxy {
     addr_buf: Vec<u8>,
@@ -35,7 +29,7 @@ impl ProxySocket for ConnectProxy {
     }
 }
 
-pub fn new_connect_proxy(mut conn: TcpStream) -> Result<ConnectProxy, Box<dyn Error>> {
+pub fn new_connect_proxy(mut conn: TcpStream) -> Result<Box<dyn ProxySocket>, Box<dyn Error>> {
     let mut buf_reader: BufReader<&mut TcpStream> = BufReader::new(&mut conn);
     let mut buf: Vec<u8> = Vec::new();
 
@@ -67,5 +61,5 @@ pub fn new_connect_proxy(mut conn: TcpStream) -> Result<ConnectProxy, Box<dyn Er
         addr_buf: addr_data,
         conn,
     };
-    Ok(s)
+    Ok(Box::new(s))
 }

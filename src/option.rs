@@ -7,7 +7,7 @@ pub struct BbkCliOption {
     pub mode: String,
     pub listen_addr: String,
     pub listen_port: i64,
-    pub listen_http_port: Option<i64>,
+    pub listen_http_port: i64,
     #[serde(default = "loglevel_default")]
     pub log_level: String,
     pub tunnel_opts: Option<TunnelOpts>,

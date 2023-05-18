@@ -34,7 +34,7 @@ impl AddrInfo {
 
             Some(&3) => {
                 let domain_length: usize = buffer[1] as usize;
-                println!("domain_length:{}",&domain_length);
+                // println!("domain_length:{}",&domain_length);
                 let domain_end = 2 + domain_length;
                 let address: String = String::from_utf8_lossy(&buffer[2..domain_end]).to_string();
                 let port = u16::from_be_bytes([buffer[buffer.len() - 2], buffer.last().copied().unwrap_or(0x00)]);

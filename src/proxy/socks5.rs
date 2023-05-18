@@ -1,13 +1,9 @@
 use std::error::Error;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use std::println;
 
-pub trait ProxySocket {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize>;
-    fn close(&mut self) -> io::Result<()>;
-    fn get_addr(&self) -> &[u8];
-}
+use super::base::ProxySocket;
 
 pub struct Socks5Proxy {
     addr_buf: Vec<u8>,
@@ -32,26 +28,23 @@ impl ProxySocket for Socks5Proxy {
     }
 }
 
-pub fn new_socks5_proxy(mut conn: TcpStream) -> Result<Socks5Proxy, Box<dyn Error>> {
-    let mut buf = [0u8; 256];
+pub fn new_socks5_proxy(mut conn: TcpStream) -> Result<Box<dyn ProxySocket>, Box<dyn Error>> {
+    let mut buf = [0; 256];
 
-    // read VER and NMETHODS
-    let (ver, n_methods) = {
-        conn.read_exact(&mut buf[0..2])?;
-        let n_methods = buf[1] as usize;
-        (buf[0], n_methods + 2) // +2 bytes for VER and NMETHODS
-    };
+    // 读取 VER 和 NMETHODS
+    conn.read_exact(&mut buf[0..2])?;
 
-    if ver != 0x05 {
+    let ver = buf[0] as usize;
+    let nmethods = buf[1] as usize;
+    if ver != 5 {
         return Err("socks5 ver invalid!".into());
     }
 
-    // read METHODS list
-    conn.read_exact(&mut buf[0..n_methods])?;
+    // 读取 METHODS 列表
+    conn.read_exact(&mut buf[0..nmethods])?;
 
-    // INIT
-    // no authentication required
-    conn.write_all(&[0x05u8, 0x00u8])?;
+    //无需认证
+    conn.write_all(&[0x05, 0x00])?;
 
     // read COMMAND
     let (ver, cmd, _, atyp) = {
@@ -59,30 +52,29 @@ pub fn new_socks5_proxy(mut conn: TcpStream) -> Result<Socks5Proxy, Box<dyn Erro
         (buf[0], buf[1], buf[2], buf[3])
     };
 
-    if ver != 0x05 || cmd != 0x01 {
-        return Err("invalid ver/cmd".into());
-    }
+    buf[0] = atyp;
 
-    let addr_len = match atyp {
+    let addrlen: usize = match atyp {
         0x01 => {
-            conn.read_exact(&mut buf[0..6])?;
-            4 + 2 // host + port
+            conn.read_exact(&mut buf[1..7])?;
+            1 + 4 + 2 //atype+ host + port
         }
         0x03 => {
             // domain name
             let domain_len = read_byte(&mut conn)?;
-            let len = (2+domain_len) as usize;
-            conn.read_exact(&mut buf[0..(len)])?;
-            domain_len as usize + 2 + 1 // domain name + port + NAMETYPE
+            let len = (2 + domain_len) as usize;
+            buf[1] = domain_len;
+            conn.read_exact(&mut buf[2..len + 2])?;
+            1 + 1 + domain_len as usize + 2 + 1 // atype+domain_len+domain name + port + NAMETYPE
         }
         _ => return Err("invalid ATYP".into()),
     };
 
-    let add_buf = &buf[3..3 + addr_len];
+    let add_buf = &buf[..addrlen];
     conn.write_all(&[0x05u8, 0x00u8, 0x00u8, 0x01u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8])?;
 
     let s = Socks5Proxy { addr_buf: add_buf.to_vec(), conn };
-    Ok(s)
+    Ok(Box::new(s))
 }
 
 fn read_byte(conn: &mut TcpStream) -> Result<u8, Box<dyn Error>> {
