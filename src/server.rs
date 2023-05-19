@@ -30,20 +30,24 @@ impl BbkServer {
         let addr = format!("{}:{}", &self.opts.listen_addr, &port);
         let server = match &self.opts.work_mode[..] {
             "tcp" => serve::new_abc_tcp_server(&self.opts.listen_addr, port),
-            // "tls" => serve::new_abc_tls_server(&addr, &self.opts.listen_port, &self.opts.ssl_crt, &self.opts.ssl_key),
-            // "ws" => server::new_abc_wss_server(&addr, &self.opts.work_path),
-            // "h2" => server::new_abc_http2_server(&addr, &self.opts.work_path, &self.opts.ssl_crt, &self.opts.ssl_key),
+            "tls" => serve::new_abc_tls_server(&addr, port, &self.opts.ssl_crt, &self.opts.ssl_key),
+            "ws" => serve::new_abc_wss_server(&addr, port,&self.opts.work_path),
+            "h2" => serve::new_abc_http2_server(&addr,port, &self.opts.work_path, &self.opts.ssl_crt, &self.opts.ssl_key),
             _ => {
                 self.logger.info(&format!("unsupported work mode: {}", &self.opts.work_mode));
                 Err("unsupported work mode".into())
             }
         }
         .unwrap();
+
+        server.listen_conn();
+
+        
         self.logger.info(&format!("server listen on {:?}", server.get_addr()));
         // server.listen_conn(|t: &TunnelConn| self.handle_connection(t));
-        server .listen_conn(|tunnel_conn| {
-            println!("Received a connection from {}", tunnel_conn.tcp_socket.peer_addr().unwrap());
-        }).unwrap();
+        // server .listen_conn(|tunnel_conn| {
+        //     println!("Received a connection from {}", tunnel_conn.tcp_socket.peer_addr().unwrap());
+        // }).unwrap();
     }
 
     // fn init_serizer(&self) -> Result<Serializer, Box<dyn Error>> {

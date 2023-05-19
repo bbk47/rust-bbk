@@ -28,6 +28,8 @@ pub struct BbkSerOption {
     pub password: String,
     pub work_mode: String,
     pub work_path: String,
+    pub ssl_crt: String,
+    pub ssl_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -19,18 +19,18 @@ struct AbcTlsServer {
 }
 
 impl FrameServer for AbcTlsServer {
-    fn listen_conn(&self, handler: impl Fn(&TunnelConn) + Send + Sync + 'static) -> Result<(), Box<dyn Error>>{
-        let pool = ThreadPool::new(NTHREADS);
-        let shared_handler = Arc::new(Mutex::new(handler));
-        for stream in self.listener.incoming() {
-            let shared_handler = shared_handler.clone();
-            let shared_stream = Arc::new(stream?);        
-            pool.execute(move || {
-                let tunnel_conn = TunnelConn::new("tls".to_owned(), shared_stream.to_owned());
-                let handler = shared_handler.lock().unwrap();
-                handler(&tunnel_conn).unwrap();
-            });
-        }
+    fn listen_conn(&self) -> Result<(), Box<dyn Error>>{
+        // let pool = ThreadPool::new(NTHREADS);
+        // let shared_handler = Arc::new(Mutex::new(handler));
+        // for stream in self.listener.incoming() {
+        //     let shared_handler = shared_handler.clone();
+        //     let shared_stream = Arc::new(stream?);        
+        //     pool.execute(move || {
+        //         let tunnel_conn = TunnelConn::new("tls".to_owned(), shared_stream.to_owned());
+        //         let handler = shared_handler.lock().unwrap();
+        //         handler(&tunnel_conn).unwrap();
+        //     });
+        // }
         Ok(())
     }
 
