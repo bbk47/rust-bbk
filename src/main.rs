@@ -2,10 +2,15 @@ use clap::Parser;
 use regex::Regex;
 use std::fs;
 
+
+mod protocol;
 // 目录模块
 mod proxy;
 mod serve;
 mod utils;
+mod transport;
+// mod stub;
+mod serializer;
 // 文件模块
 mod client;
 mod option;

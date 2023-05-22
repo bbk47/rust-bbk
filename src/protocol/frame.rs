@@ -1,15 +1,15 @@
 // protocol.rs
 use rand::Rng;
 
-// pub const INIT_FRAME: u8 = 0;
-// pub const STREAM_FRAME: u8 = 1;
-// pub const FIN_FRAME: u8 = 2;
-// pub const RST_FRAME: u8 = 3;
-// pub const EST_FRAME: u8 = 4;
+pub const INIT_FRAME: u8 = 0;
+pub const STREAM_FRAME: u8 = 1;
+pub const FIN_FRAME: u8 = 2;
+pub const RST_FRAME: u8 = 3;
+pub const EST_FRAME: u8 = 4;
 pub const PING_FRAME: u8 = 6;
 pub const PONG_FRAME: u8 = 9;
 
-// pub const DATA_MAX_SIZE: usize = 1024 * 2;
+pub const DATA_MAX_SIZE: usize = 1024 * 2;
 
 // 这段 Rust 代码定义了名为 Frame 的结构体，代表协议中的一个帧(Frame)。该结构体有以下字段:
 // version: 一个 u8 类型，表示协议版本号。
@@ -133,29 +133,29 @@ pub fn generate_random_bytes(length: usize) -> Vec<u8> {
 }
 
 
-// pub fn split_frame(frame1: &Frame) -> Vec<Frame> {
-//     let mut frames = Vec::new();
-//     let length: usize = frame1.data.len();
-//     if length <= DATA_MAX_SIZE {
-//         frames.push(Frame::new(
-//             frame1.version,
-//             frame1.cid.clone(),
-//             frame1.r#type,
-//             frame1.data.clone(),
-//         ));
-//     } else {
-//         let mut offset = 0;
-//         while offset < length {
-//             let end_index = std::cmp::min(offset + DATA_MAX_SIZE, length);
-//             let segment = frame1.data[offset..end_index].to_vec();
-//             frames.push(Frame::new(
-//                 frame1.version,
-//                 frame1.cid.clone(),
-//                 frame1.r#type,
-//                 segment,
-//             ));
-//             offset = end_index;
-//         }
-//     }
-//     frames
-// }
+pub fn split_frame(frame1: &Frame) -> Vec<Frame> {
+    let mut frames = Vec::new();
+    let length: usize = frame1.data.len();
+    if length <= DATA_MAX_SIZE {
+        frames.push(Frame::new(
+            frame1.version,
+            frame1.cid.clone(),
+            frame1.r#type,
+            frame1.data.clone(),
+        ));
+    } else {
+        let mut offset = 0;
+        while offset < length {
+            let end_index = std::cmp::min(offset + DATA_MAX_SIZE, length);
+            let segment = frame1.data[offset..end_index].to_vec();
+            frames.push(Frame::new(
+                frame1.version,
+                frame1.cid.clone(),
+                frame1.r#type,
+                segment,
+            ));
+            offset = end_index;
+        }
+    }
+    frames
+}
