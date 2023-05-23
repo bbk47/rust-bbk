@@ -9,7 +9,7 @@ mod proxy;
 mod serve;
 mod utils;
 mod transport;
-// mod stub;
+mod stub;
 mod serializer;
 // 文件模块
 mod client;

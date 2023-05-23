@@ -12,3 +12,5 @@ pub use frame::EST_FRAME;
 pub use frame::STREAM_FRAME;
 pub use frame::FIN_FRAME;
 pub use frame::RST_FRAME;
+pub use frame::PING_FRAME;
+pub use frame::PONG_FRAME;

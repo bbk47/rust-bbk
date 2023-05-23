@@ -3,7 +3,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 use super::base::Transport;
-
+#[derive(Debug)]
 pub struct TcpTransport {
     pub conn: TcpStream,
 }

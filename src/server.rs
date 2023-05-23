@@ -1,15 +1,15 @@
 use std::error::Error;
+use std::fmt::Debug;
 use std::sync::Arc;
-
 
 use crate::option::BbkSerOption;
 use crate::serve;
 use crate::serve::{FrameServer, TunnelConn};
 use crate::utils::logger::{LogLevel, Logger};
 
-use crate::transport;
-// use crate::stub::TunnelStub;
 use crate::serializer::Serializer;
+use crate::stub::TunnelStub;
+use crate::transport::{self, TcpTransport, Transport};
 
 pub struct BbkServer {
     opts: BbkSerOption,
@@ -22,47 +22,53 @@ impl BbkServer {
         println!("server new====");
         let logger = Logger::new(LogLevel::Info);
         let serizer = Serializer::new(&opts.method, &opts.password).unwrap();
-        BbkServer { opts: opts, logger,serizer:Arc::new(serizer) }
+        BbkServer {
+            opts: opts,
+            logger,
+            serizer: Arc::new(serizer),
+        }
     }
 
-    pub  fn handle_connection(&self, tunconn: &TunnelConn) {
+    pub fn handle_connection(&self, tunconn: &TunnelConn) {
         println!("connection====");
         // let tsport = wrap_tunnel(tunconn);
         let conn = tunconn.tcp_socket.try_clone().unwrap();
-        let tsport =  transport::TcpTransport {conn};
-        // let server_stub = TunnelStub::new(Arc::new(tsport),self.serizer).unwrap();
+        let tsport: Arc<dyn Transport + Send+Sync > = Arc::new(TcpTransport { conn });
 
-        // loop {
-        //     match server_stub.accept().await {
-        //         Ok(stream) => {
-        //             let remote_address = parse_addr_info(&stream.addr)
-        //                 .map(|info| format!("{}:{}", info.addr, info.port))
-        //                 .unwrap_or_else(|_| "unknown".into());
-        //             self.logger.info(&format!("REQ CONNECT=>{}\n", remote_address));
-        //             let target_socket = TcpStream::connect(remote_address.clone()).await;
-        //             if let Ok(socket) = target_socket {
-        //                 self.logger.info(&format!("DIAL SUCCESS==>{}", remote_address));
+        println!("tsport:{:?}", &conn);
+        let server_stub = TunnelStub::new(tsport, self.serizer).unwrap();
 
-        //                 server_stub.set_ready(stream);
+        loop {
+            match server_stub.accept() {
+                Ok(stream) => {
+                    let remote_address = parse_addr_info(&stream.addr)
+                        .map(|info| format!("{}:{}", info.addr, info.port))
+                        .unwrap_or_else(|_| "unknown".into());
+                    self.logger.info(&format!("REQ CONNECT=>{}\n", remote_address));
+                    let target_socket = TcpStream::connect(remote_address.clone()).await;
+                    if let Ok(socket) = target_socket {
+                        self.logger.info(&format!("DIAL SUCCESS==>{}", remote_address));
 
-        //                 tokio::spawn(async move {
-        //                     if let Err(err) = stream.clone().forward(&mut socket).await {
-        //                         self.logger.error(&format!("stream error:{}", err));
-        //                     }
-        //                 });
-        //                 tokio::spawn(async move {
-        //                     if let Err(err) = socket.clone().forward(&mut stream).await {
-        //                         self.logger.error(&format!("stream error:{}", err));
-        //                     }
-        //                 });
-        //             }
-        //         }
-        //         Err(err) => {
-        //             self.logger.error(&format!("couldn't get a client stream: {}", err));
-        //             return;
-        //         }
-        //     }
-        // }
+                        server_stub.set_ready(stream);
+
+                        tokio::spawn(async move {
+                            if let Err(err) = stream.clone().forward(&mut socket).await {
+                                self.logger.error(&format!("stream error:{}", err));
+                            }
+                        });
+                        tokio::spawn(async move {
+                            if let Err(err) = socket.clone().forward(&mut stream).await {
+                                self.logger.error(&format!("stream error:{}", err));
+                            }
+                        });
+                    }
+                }
+                Err(err) => {
+                    self.logger.error(&format!("couldn't get a client stream: {}", err));
+                    return;
+                }
+            }
+        }
     }
 
     fn init_server(&self) {
@@ -86,8 +92,6 @@ impl BbkServer {
         //     }
         //     // 处理新连接的代码
         // }
-
-       
 
         for tunnel in server {
             match tunnel {

@@ -1,36 +1,61 @@
-use std::cell::RefCell;
+use std::borrow::BorrowMut;
+use std::error::Error;
 use std::io::{self, Read, Write};
-use std::rc::Rc;
+use std::sync::mpsc::{channel, Receiver, Sender};
 
 pub struct CopyStream {
     pub cid: String,
-    addr: Vec<u8>,
-    reader: Rc<RefCell<dyn Read>>,
-    writer: Rc<RefCell<dyn Write>>,
+    pub addr: Vec<u8>,
+    wp: Sender<Vec<u8>>,
+    rp: Receiver<Vec<u8>>,
+    wp2: Sender<Vec<u8>>,
+    rp2: Receiver<Vec<u8>>,
 }
 
 impl CopyStream {
-    fn new(cid: String, addr: Vec<u8>, reader: Rc<RefCell<dyn Read>>, writer: Rc<RefCell<dyn Write>>) -> Self {
-        CopyStream { cid, addr, reader, writer }
+    pub fn new(cid: String, addr: Vec<u8>) -> Self {
+        let (mut wp, mut rp): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = channel();
+        let (mut wp2, mut rp2): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = channel();
+        CopyStream { cid, addr, rp, wp, rp2, wp2 }
     }
+
+    pub fn produce(&self, buf: &[u8]) {
+        let _ = self.wp.send(buf.to_vec());
+    }
+
+    // pub fn accept(&self) -> Result<Vec<u8>, dyn Error> {
+    //     match self.rp2.try_recv() {
+    //         Ok(data) => Some(Ok(data)),
+    //         Err(e) => Some(Err(e)),
+    //     }
+    // }
 }
 
 impl Read for CopyStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let mut reader = self.reader.borrow_mut();
-        reader.read(buf)
+        // let mut reader = self.rp.borrow_mut();
+        // reader.read(buf)
+        match self.rp.try_recv() {
+            Ok(data) => {
+                let len = data.len().min(buf.len());
+                buf[0..len].copy_from_slice(&data[0..len]);
+                Ok(len)
+            }
+            Err(_) => Err(io::ErrorKind::WouldBlock.into()),
+        }
     }
 }
 
 impl Write for CopyStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let mut writer = self.writer.borrow_mut();
-        writer.write(buf)
+        let mut writer = self.wp2.borrow_mut();
+        let ret = writer.send(buf.to_vec()).unwrap();
+        Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        let mut writer = self.writer.borrow_mut();
-        writer.flush()
+        // no cache
+        Ok(())
     }
 }
 

@@ -30,7 +30,8 @@ pub struct Frame {
 }
 
 impl Frame {
-    pub fn new(version: u8, cid: String, r#type: u8, data: Vec<u8>) -> Frame {
+    pub fn new(cid: String, r#type: u8, data: Vec<u8>) -> Frame {
+        let version = 0x1;
         Frame {
             version,
             cid,
@@ -40,7 +41,6 @@ impl Frame {
             atime: None,
         }
     }
-
 }
 
 /**
@@ -74,10 +74,10 @@ pub fn encode(frame: &Frame) -> Vec<u8> {
 
     ver_buf.extend(cid_len_buf); //2
     ver_buf.extend(cid_buf); // 32
-    ver_buf.extend(type_buf); // 1 
+    ver_buf.extend(type_buf); // 1
     ver_buf.extend(data_len_buf); // 2
     ver_buf.extend(&frame.data); //
-    // concatenate all the buffers together to produce the binary data
+                                 // concatenate all the buffers together to produce the binary data
     ver_buf
 }
 
@@ -100,17 +100,16 @@ pub fn decode(binary_data: &[u8]) -> Result<Frame, String> {
 
     // check if the binary data has enough bytes to hold the specified data length
     let data_start = cid_len + 5;
-    println!("data_start:{}, data_len:{}",data_start,data_len);
+    println!("data_start:{}, data_len:{}", data_start, data_len);
     if binary_data.len() < data_start + data_len {
         return Err("Invalid binary data length3".to_string());
     }
 
-    
     // extract the data buffer from the binary data
     let data = binary_data[data_start..data_start + data_len].to_vec();
 
     // create a new frame with the extracted information
-    let mut frame = Frame::new(version, cid_buf, r#type, data);
+    let mut frame = Frame::new(cid_buf, r#type, data);
 
     // update the stime and atime fields based on the type of frame
     if r#type == PING_FRAME {
@@ -132,28 +131,17 @@ pub fn generate_random_bytes(length: usize) -> Vec<u8> {
     bytes
 }
 
-
 pub fn split_frame(frame1: &Frame) -> Vec<Frame> {
     let mut frames = Vec::new();
     let length: usize = frame1.data.len();
     if length <= DATA_MAX_SIZE {
-        frames.push(Frame::new(
-            frame1.version,
-            frame1.cid.clone(),
-            frame1.r#type,
-            frame1.data.clone(),
-        ));
+        frames.push(Frame::new(frame1.cid.clone(), frame1.r#type, frame1.data.clone()));
     } else {
         let mut offset = 0;
         while offset < length {
             let end_index = std::cmp::min(offset + DATA_MAX_SIZE, length);
             let segment = frame1.data[offset..end_index].to_vec();
-            frames.push(Frame::new(
-                frame1.version,
-                frame1.cid.clone(),
-                frame1.r#type,
-                segment,
-            ));
+            frames.push(Frame::new(frame1.cid.clone(), frame1.r#type, segment));
             offset = end_index;
         }
     }
