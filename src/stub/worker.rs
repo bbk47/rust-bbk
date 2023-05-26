@@ -157,8 +157,8 @@ impl TunnelStub {
         self.sender_send.send(frame).unwrap();
     }
 
-    pub fn accept(&self) -> Option<Arc<CopyStream>> {
-        match self.streamch_recv.recv() {
+    pub async fn accept(&self) -> Option<Arc<CopyStream>> {
+        match self.streamch_recv.recv().await {
             Ok(stream) => Some(Ok(stream)),
             Err(_) => _,
         }

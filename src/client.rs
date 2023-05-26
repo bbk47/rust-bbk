@@ -1,13 +1,35 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::println;
+use std::time::Duration;
+use retry::{delay::Exponential, retry};
+use tokio::sync::mpsc;
 
 use crate::{proxy, utils};
 
-use crate::option::BbkCliOption;
+use crate::option::{BbkCliOption, TunnelOpts};
 use crate::proxy::ProxySocket;
+use crate::utils::logger::Logger;
+use crate::transport;
+
+struct BrowserObj {
+    cid: String,
+    // proxy_socket: dyn ProxySocket,
+    // stream_ch: mpsc::Sender<stub::Stream>,
+}
+
 
 pub struct BbkClient {
     opts: BbkCliOption,
+    // logger: Logger,
+    // tunnel_opts: TunnelOpts,
+    // req_ch: mpsc::Receiver<BrowserObj>,
+    // retry_count: u8,
+    // tunnel_status: u8,
+    // // stub_client: stub::TunnelStub,
+    // // transport: dyn transport::Transport,
+    // last_pong: u64,
+    // browser_proxy: HashMap<String, BrowserObj>, // 线程共享变量
 }
 
 impl BbkClient {
@@ -15,6 +37,33 @@ impl BbkClient {
         println!("client new====");
         BbkClient { opts: opts }
     }
+
+    // fn setup_ws_connection(&mut self) -> Result<()> {
+    //     let tun_opts = self.tunnel_opts.clone();
+    //     self.logger.info(format!("creating {} tunnel", tun_opts.protocol));
+    //     let result = retry(
+    //         Exponential::from_millis(500) // 指数计算重试延迟
+    //             .map(|x| Duration::from_millis(x))
+    //             .take(5) // 最多重试5次
+    //             .retry_if(|error| {
+    //                 // 尝试捕获任何错误，并返回true以进行重试
+    //                 eprintln!("setup tunnel failed!{:?}", error);
+    //                 true
+    //             }),
+    //         || {
+    //             self.transport = CreateTransport(tun_opts.clone())?;
+    //             self.stub_client = stub::TunnelStub::new(&self.transport);
+    //             self.stub_client.notify_pong(|up, down| {
+    //                 self.logger.info(format!("tunnel health！ up:{}ms, down:{}ms rtt:{}ms", up, down, up + down));
+    //             });
+    //             self.tunnel_status = TUNNEL_OK;
+    //             self.logger.debug("create tunnel success!");
+    //             Ok(())
+    //         },
+    //     );
+    //     result.context(format!("Failed to create {} tunnel", tun_opts.protocol))
+    // }
+
 
     pub fn bootstrap(self) {
         let tunopts = match self.opts.tunnel_opts {
@@ -44,7 +93,6 @@ impl BbkClient {
                     } else {
                         println!("=====exception addr socks5...");
                     }
-                 
                 }
                 Err(e) => {
                     println!("socks5 proxy err:{}", e);
