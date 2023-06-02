@@ -1,16 +1,20 @@
+use retry::{delay::Exponential, retry};
 use std::collections::HashMap;
 use std::error::Error;
 use std::println;
 use std::time::Duration;
-use retry::{delay::Exponential, retry};
 use tokio::sync::mpsc;
 
 use crate::{proxy, utils};
 
 use crate::option::{BbkCliOption, TunnelOpts};
 use crate::proxy::ProxySocket;
-use crate::utils::logger::Logger;
 use crate::transport;
+use crate::utils::logger::{Logger, LogLevel};
+
+const TUNNEL_INIT: u8 = 0x1;
+const TUNNEL_OK: u8 = 0x2;
+const TUNNEL_DISCONNECT: u8 = 0x3;
 
 struct BrowserObj {
     cid: String,
@@ -18,14 +22,13 @@ struct BrowserObj {
     // stream_ch: mpsc::Sender<stub::Stream>,
 }
 
-
 pub struct BbkClient {
     opts: BbkCliOption,
     // logger: Logger,
     // tunnel_opts: TunnelOpts,
-    // req_ch: mpsc::Receiver<BrowserObj>,
+    req_ch: mpsc::UnboundedReceiver<BrowserObj>,
     // retry_count: u8,
-    // tunnel_status: u8,
+    tunnel_status: u8,
     // // stub_client: stub::TunnelStub,
     // // transport: dyn transport::Transport,
     // last_pong: u64,
@@ -35,7 +38,15 @@ pub struct BbkClient {
 impl BbkClient {
     pub fn new(opts: BbkCliOption) -> Self {
         println!("client new====");
-        BbkClient { opts: opts }
+        // let (tx, mut rx) = mpsc::channel(10); // 使用tokio的mpsc
+        // let mut proxy_server_tx = tx.clone();
+        let logger = Logger::new(LogLevel::Info);
+        let (tx, rx) = mpsc::unbounded_channel(); // 使用tokio的mpsc替代crossbeam_channel
+        BbkClient {
+            opts: opts,
+            req_ch: rx,
+            tunnel_status: TUNNEL_INIT,
+        }
     }
 
     // fn setup_ws_connection(&mut self) -> Result<()> {
@@ -64,8 +75,43 @@ impl BbkClient {
     //     result.context(format!("Failed to create {} tunnel", tun_opts.protocol))
     // }
 
-
-    pub fn bootstrap(self) {
+    fn service_worker(&mut self) {
+        let (tx, mut rx) = mpsc::channel(10); // 使用tokio的mpsc
+        let mut proxy_server_tx = tx.clone();
+        tokio::spawn(async {
+            loop {
+                if self.tunnel_status != TUNNEL_OK {
+                    if let Err(err) = self.setup_ws_connection() {
+                        eprintln!("Failed to setup ws connection: {:?}", err);
+                        self.tunnel_status = TUNNEL_DISCONNECT;
+                        continue;
+                    }
+                }
+                match self.req_ch.recv().await {
+                    Some(ref request) => {
+                        let tx = tx.clone();
+                        let proxy_socket = request.proxy_socket.try_clone()?;
+                        tokio::spawn(async move {
+                            // 使用tokio::spawn替代thread::spawn
+                            if let Err(err) = tx
+                                .send(BrowserObj {
+                                    proxy_socket,
+                                    cid: "".to_string(),
+                                    stream_ch: mpsc::channel(10).0,
+                                })
+                                .await
+                            {
+                                eprintln!("Error sending to service worker channel: {:?}", err);
+                            }
+                        });
+                    }
+                    None => (),
+                }
+            }
+        });
+    }
+    pub fn bootstrap(&self) {
+        self.service_worker();
         let tunopts = match self.opts.tunnel_opts {
             Some(tp) => tp,
             None => panic!("missing tunnelOpts config"),
@@ -81,9 +127,9 @@ impl BbkClient {
         let proxy_server = proxy::new_proxy_server(&self.opts.listen_addr, port).unwrap();
         println!("Proxy server listening on {}", proxy_server.get_addr());
 
-        proxy_server.listen_conn(|stream| {
+        proxy_server.listen_conn(|tcpstream| {
             // Handle incoming connections here
-            match proxy::socks5::new_socks5_proxy(stream) {
+            match proxy::socks5::new_socks5_proxy(tcpstream) {
                 Ok(proxy) => {
                     let addr = proxy.get_addr();
                     // println!("addr:{:?}", addr.to_vec());

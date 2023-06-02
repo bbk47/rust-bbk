@@ -2,6 +2,8 @@ use std::error::Error;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use tokio::runtime::Runtime;
+
 use crate::option::BbkSerOption;
 use crate::serve;
 use crate::serve::{FrameServer, TunnelConn};
@@ -29,47 +31,47 @@ impl BbkServer {
         }
     }
 
-    pub fn handle_connection(&self, tunconn: &TunnelConn) {
+    pub async fn handle_connection(&self, tunconn: &TunnelConn) {
         println!("connection====");
         // let tsport = wrap_tunnel(tunconn);
         let conn = tunconn.tcp_socket.try_clone().unwrap();
         println!("tsport:{:?}", &conn);
-        let tsport: Arc<dyn Transport + Send+Sync > = Arc::new(TcpTransport { conn });
+        let tsport: Arc<dyn Transport + Send + Sync> = Arc::new(TcpTransport { conn });
 
-        let server_stub = TunnelStub::new(tsport, self.serizer).unwrap();
+        let mut server_stub = TunnelStub::new(tsport, &self.serizer).unwrap();
 
-        // loop {
-        //     match server_stub.accept() {
-        //         Ok(stream) => {
-        //             println!(&stream.addr)
-        //             // let remote_address = parse_addr_info(&stream.addr)
-        //             //     .map(|info| format!("{}:{}", info.addr, info.port))
-        //             //     .unwrap_or_else(|_| "unknown".into());
-        //             // self.logger.info(&format!("REQ CONNECT=>{}\n", remote_address));
-        //             // let target_socket = TcpStream::connect(remote_address.clone()).await;
-        //             // if let Ok(socket) = target_socket {
-        //             //     self.logger.info(&format!("DIAL SUCCESS==>{}", remote_address));
+        loop {
+            match server_stub.accept().await {
+                Ok(stream) => {
+                    println!("addr:{:?}", &stream.addr)
+                    // let remote_address = parse_addr_info(&stream.addr)
+                    //     .map(|info| format!("{}:{}", info.addr, info.port))
+                    //     .unwrap_or_else(|_| "unknown".into());
+                    // self.logger.info(&format!("REQ CONNECT=>{}\n", remote_address));
+                    // let target_socket = TcpStream::connect(remote_address.clone()).await;
+                    // if let Ok(socket) = target_socket {
+                    //     self.logger.info(&format!("DIAL SUCCESS==>{}", remote_address));
 
-        //             //     server_stub.set_ready(stream);
+                    //     server_stub.set_ready(stream);
 
-        //             //     tokio::spawn(async move {
-        //             //         if let Err(err) = stream.clone().forward(&mut socket).await {
-        //             //             self.logger.error(&format!("stream error:{}", err));
-        //             //         }
-        //             //     });
-        //             //     tokio::spawn(async move {
-        //             //         if let Err(err) = socket.clone().forward(&mut stream).await {
-        //             //             self.logger.error(&format!("stream error:{}", err));
-        //             //         }
-        //             //     });
-        //             // }
-        //         }
-        //         Err(err) => {
-        //             self.logger.error(&format!("couldn't get a client stream: {}", err));
-        //             return;
-        //         }
-        //     }
-        // }
+                    //     tokio::spawn(async move {
+                    //         if let Err(err) = stream.clone().forward(&mut socket).await {
+                    //             self.logger.error(&format!("stream error:{}", err));
+                    //         }
+                    //     });
+                    //     tokio::spawn(async move {
+                    //         if let Err(err) = socket.clone().forward(&mut stream).await {
+                    //             self.logger.error(&format!("stream error:{}", err));
+                    //         }
+                    //     });
+                    // }
+                }
+                Err(err) => {
+                    self.logger.error(&format!("couldn't get a client stream: {}", err));
+                    return;
+                }
+            }
+        }
     }
 
     fn init_server(&self) {
@@ -94,19 +96,24 @@ impl BbkServer {
         //     // 处理新连接的代码
         // }
 
-        for tunnel in server {
-            match tunnel {
-                Ok(tun) => {
-                    // 对新连接进行处理
-                    // 处理完成后关闭连接
-                    println!("new connection coming...");
-                    self.handle_connection(&tun)
-                }
-                Err(e) => {
-                    eprintln!("Error: {}", e);
+        let mut rt = Runtime::new().unwrap();
+
+        rt.block_on(async {
+            // 这里是需要异步执行的代码
+            for tunnel in server {
+                match tunnel {
+                    Ok(tun) => {
+                        // 对新连接进行处理
+                        // 处理完成后关闭连接
+                        println!("new connection coming...");
+                        self.handle_connection(&tun).await;
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                    }
                 }
             }
-        }
+        });
 
         // self.logger.info(&format!("server listen on {:?}", server.get_addr()));
         // server.listen_conn(|t: &TunnelConn| self.handle_connection(t));
