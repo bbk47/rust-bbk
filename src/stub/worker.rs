@@ -18,7 +18,7 @@ use crate::transport::Transport;
 
 pub struct TunnelStub<'a> {
     serizer: &'a Arc<Serializer>,
-    tsport: Arc<dyn Transport>,
+    tsport: Arc<Box<dyn Transport+ Send + Sync>>,
     streams: HashMap<String, Arc<CopyStream>>,
     streamch_send: UnboundedSender<Arc<CopyStream>>,
     streamch_recv: UnboundedReceiver<Arc<CopyStream>>,
@@ -29,12 +29,12 @@ pub struct TunnelStub<'a> {
 }
 
 impl<'a> TunnelStub<'a> {
-    pub fn new(tsport: Arc<dyn Transport + Send + Sync>, serizer: &'a Arc<Serializer>) -> io::Result<Self> {
+    pub fn new(tsport: Arc<Box<dyn Transport + Send + Sync>>, serizer: &'a Arc<Serializer>) -> Self{
         let (streamch_send, streamch_recv) = mpsc::unbounded_channel();
         let (sender_send, sender_recv) = mpsc::unbounded_channel();
         let (closech_send, closech_recv) = mpsc::unbounded_channel();
 
-        let stub = TunnelStub {
+        let stub: TunnelStub<'a> = TunnelStub {
             serizer,
             tsport,
             streams: HashMap::new(),
@@ -55,7 +55,7 @@ impl<'a> TunnelStub<'a> {
         // tokio::spawn(readworker);
         // tokio::spawn(writeworker);
 
-        Ok(stub)
+        stub
     }
 
     fn read_worker(stub: &'a TunnelStub, tsport: Arc<dyn Transport>, serizer: Arc<Serializer>, sender_send: UnboundedSender<Frame>, closech: UnboundedReceiver<()>) {

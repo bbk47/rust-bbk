@@ -12,6 +12,12 @@ pub struct CopyStream {
     rp2: Receiver<Vec<u8>>,
 }
 
+unsafe impl Sync for CopyStream {}
+
+unsafe impl Send for CopyStream {}
+
+
+
 impl CopyStream {
     pub fn new(cid: String, addr: Vec<u8>) -> Self {
         let (mut wp, mut rp): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = channel();

@@ -36,9 +36,10 @@ impl BbkServer {
         // let tsport = wrap_tunnel(tunconn);
         let conn = tunconn.tcp_socket.try_clone().unwrap();
         println!("tsport:{:?}", &conn);
-        let tsport: Arc<dyn Transport + Send + Sync> = Arc::new(TcpTransport { conn });
+        let tcpts = TcpTransport{conn};
+        let tsport: Arc<Box<dyn Transport + Send + Sync>> = Arc::new(Box::new(tcpts));
 
-        let mut server_stub = TunnelStub::new(tsport, &self.serizer).unwrap();
+        let mut server_stub = TunnelStub::new(tsport, &self.serizer);
 
         loop {
             match server_stub.accept().await {

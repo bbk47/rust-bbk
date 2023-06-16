@@ -1,34 +1,10 @@
 use std::error::Error;
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::println;
 
 use super::base::ProxySocket;
 
-pub struct Socks5Proxy {
-    addr_buf: Vec<u8>,
-    conn: TcpStream,
-}
-
-impl ProxySocket for Socks5Proxy {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.conn.read(buf)
-    }
-
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.conn.write(buf)
-    }
-
-    fn close(&mut self) -> io::Result<()> {
-        self.conn.shutdown(std::net::Shutdown::Both)
-    }
-
-    fn get_addr(&self) -> &[u8] {
-        &self.addr_buf[..]
-    }
-}
-
-pub fn new_socks5_proxy(mut conn: TcpStream) -> Result<Box<dyn ProxySocket>, Box<dyn Error>> {
+pub fn new_socks5_proxy(mut conn: TcpStream) -> Result<ProxySocket, Box<dyn Error>> {
     let mut buf = [0; 256];
 
     // 读取 VER 和 NMETHODS
@@ -73,8 +49,8 @@ pub fn new_socks5_proxy(mut conn: TcpStream) -> Result<Box<dyn ProxySocket>, Box
     let add_buf = &buf[..addrlen];
     conn.write_all(&[0x05u8, 0x00u8, 0x00u8, 0x01u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8])?;
 
-    let s = Socks5Proxy { addr_buf: add_buf.to_vec(), conn };
-    Ok(Box::new(s))
+    let s = ProxySocket::new(add_buf.to_vec(), conn);
+    Ok(s)
 }
 
 fn read_byte(conn: &mut TcpStream) -> Result<u8, Box<dyn Error>> {

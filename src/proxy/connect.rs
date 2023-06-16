@@ -1,35 +1,12 @@
-use std::io::{self, Read, Write, BufReader};
-use std::io::BufRead;
-use std::net::TcpStream;
 use std::error::Error;
+use std::io::BufRead;
+use std::io::{BufReader, Read, Write};
+use std::net::TcpStream;
 
-use crate::utils;
 use super::base::ProxySocket;
+use crate::utils;
 
-pub struct ConnectProxy {
-    addr_buf: Vec<u8>,
-    conn: TcpStream,
-}
-
-impl ProxySocket for ConnectProxy {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.conn.read(buf)
-    }
-
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.conn.write(buf)
-    }
-
-    fn close(&mut self) -> io::Result<()> {
-        self.conn.shutdown(std::net::Shutdown::Both)
-    }
-
-    fn get_addr(&self) -> &[u8] {
-        &self.addr_buf[..]
-    }
-}
-
-pub fn new_connect_proxy(mut conn: TcpStream) -> Result<Box<dyn ProxySocket>, Box<dyn Error>> {
+pub fn new_connect_proxy(mut conn: TcpStream) -> Result<ProxySocket, Box<dyn Error>> {
     let mut buf_reader: BufReader<&mut TcpStream> = BufReader::new(&mut conn);
     let mut buf: Vec<u8> = Vec::new();
 
@@ -57,9 +34,6 @@ pub fn new_connect_proxy(mut conn: TcpStream) -> Result<Box<dyn ProxySocket>, Bo
     let port: u16 = port.parse().unwrap();
     // build socks5 address data
     let addr_data = utils::socks5::build_socks5_address_data(hostname, port)?;
-    let s = ConnectProxy {
-        addr_buf: addr_data,
-        conn,
-    };
-    Ok(Box::new(s))
+    let s = ProxySocket::new(addr_data, conn);
+    Ok(s)
 }

@@ -1,12 +1,17 @@
-
 mod base;
 // mod http2;
 mod tcp;
 // mod tls;
 // mod websocket;
 
+use std::error::Error;
+
 pub use base::Transport;
 pub use tcp::TcpTransport;
+
+use crate::option::TunnelOpts;
+
+use self::tcp::new_tcp_transport;
 
 
 // pub fn wrap_tunnel(tunnel: &server::TunnelConn) -> Box<dyn Transport> {
@@ -21,3 +26,10 @@ pub use tcp::TcpTransport;
 //         }),
 //     }
 // }
+
+pub fn create_transport(tunOpts: &TunnelOpts) -> Result<Box<dyn Transport + Send + Sync>, Box<dyn Error>> {
+    let tunport:u16= tunOpts.port.parse()?;
+    let tsport=new_tcp_transport(&tunOpts.host,tunport)?;
+
+    Ok(Box::new(tsport))
+}

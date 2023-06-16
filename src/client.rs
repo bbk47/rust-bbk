@@ -1,15 +1,18 @@
+use retry::delay::jitter;
 use retry::{delay::Exponential, retry};
 use std::collections::HashMap;
 use std::error::Error;
 use std::println;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-use crate::{proxy, utils};
+use crate::serializer::Serializer;
+use crate::{proxy, utils, stub};
 
 use crate::option::{BbkCliOption, TunnelOpts};
 use crate::proxy::ProxySocket;
-use crate::transport;
+use crate::transport::{self, create_transport};
 use crate::utils::logger::{Logger, LogLevel};
 
 const TUNNEL_INIT: u8 = 0x1;
@@ -18,104 +21,101 @@ const TUNNEL_DISCONNECT: u8 = 0x3;
 
 struct BrowserObj {
     cid: String,
-    // proxy_socket: dyn ProxySocket,
+    proxy_socket: ProxySocket,
     // stream_ch: mpsc::Sender<stub::Stream>,
 }
 
-pub struct BbkClient {
+pub struct BbkClient<'a> {
     opts: BbkCliOption,
-    // logger: Logger,
-    // tunnel_opts: TunnelOpts,
+    logger: Logger,
+    tunnel_opts: TunnelOpts,
     req_ch: mpsc::UnboundedReceiver<BrowserObj>,
     // retry_count: u8,
+    serizer: Arc<Serializer>,
     tunnel_status: u8,
-    // // stub_client: stub::TunnelStub,
-    // // transport: dyn transport::Transport,
+    stub_client: Option<Arc<stub::TunnelStub<'a>>>,
     // last_pong: u64,
     // browser_proxy: HashMap<String, BrowserObj>, // 线程共享变量
 }
 
-impl BbkClient {
+impl BbkClient<'_> {
     pub fn new(opts: BbkCliOption) -> Self {
         println!("client new====");
         // let (tx, mut rx) = mpsc::channel(10); // 使用tokio的mpsc
         // let mut proxy_server_tx = tx.clone();
         let logger = Logger::new(LogLevel::Info);
+        let tunopts = opts.tunnel_opts.clone().unwrap();
+        let serizer = Serializer::new(&tunopts.method, &tunopts.password).unwrap();
         let (tx, rx) = mpsc::unbounded_channel(); // 使用tokio的mpsc替代crossbeam_channel
         BbkClient {
+            tunnel_opts: tunopts,
             opts: opts,
             req_ch: rx,
+            serizer: Arc::new(serizer),
+            logger: logger,
+            stub_client:None,
             tunnel_status: TUNNEL_INIT,
         }
     }
-
-    // fn setup_ws_connection(&mut self) -> Result<()> {
-    //     let tun_opts = self.tunnel_opts.clone();
-    //     self.logger.info(format!("creating {} tunnel", tun_opts.protocol));
-    //     let result = retry(
-    //         Exponential::from_millis(500) // 指数计算重试延迟
-    //             .map(|x| Duration::from_millis(x))
-    //             .take(5) // 最多重试5次
-    //             .retry_if(|error| {
-    //                 // 尝试捕获任何错误，并返回true以进行重试
-    //                 eprintln!("setup tunnel failed!{:?}", error);
-    //                 true
-    //             }),
-    //         || {
-    //             self.transport = CreateTransport(tun_opts.clone())?;
-    //             self.stub_client = stub::TunnelStub::new(&self.transport);
-    //             self.stub_client.notify_pong(|up, down| {
-    //                 self.logger.info(format!("tunnel health！ up:{}ms, down:{}ms rtt:{}ms", up, down, up + down));
-    //             });
-    //             self.tunnel_status = TUNNEL_OK;
-    //             self.logger.debug("create tunnel success!");
-    //             Ok(())
-    //         },
-    //     );
-    //     result.context(format!("Failed to create {} tunnel", tun_opts.protocol))
-    // }
-
-    fn service_worker(&mut self) {
-        let (tx, mut rx) = mpsc::channel(10); // 使用tokio的mpsc
-        let mut proxy_server_tx = tx.clone();
-        tokio::spawn(async {
-            loop {
-                if self.tunnel_status != TUNNEL_OK {
-                    if let Err(err) = self.setup_ws_connection() {
-                        eprintln!("Failed to setup ws connection: {:?}", err);
-                        self.tunnel_status = TUNNEL_DISCONNECT;
-                        continue;
-                    }
-                }
-                match self.req_ch.recv().await {
-                    Some(ref request) => {
-                        let tx = tx.clone();
-                        let proxy_socket = request.proxy_socket.try_clone()?;
-                        tokio::spawn(async move {
-                            // 使用tokio::spawn替代thread::spawn
-                            if let Err(err) = tx
-                                .send(BrowserObj {
-                                    proxy_socket,
-                                    cid: "".to_string(),
-                                    stream_ch: mpsc::channel(10).0,
-                                })
-                                .await
-                            {
-                                eprintln!("Error sending to service worker channel: {:?}", err);
-                            }
-                        });
-                    }
-                    None => (),
+    fn setup_ws_connection(&mut self) -> Result<(),Box<dyn Error>> {
+        let tun_opts = self.tunnel_opts.clone();
+        self.logger.info(&format!("creating {} tunnel", tun_opts.protocol));
+        let result: Result<(), retry::Error<_>> = retry(Exponential::from_millis(10).map(jitter).take(3),|| {
+            match create_transport(&tun_opts) {
+                Ok(tsport) => {
+                    let arcts = Arc::new(tsport);
+                   let stub: stub::TunnelStub<'_> = stub::TunnelStub::new(arcts,&self.serizer);
+                   self.stub_client = Some(Arc::new(stub));
+                    // self.stub_client.notify_pong(|up, down| {
+                    //     self.logger.info(&format!("tunnel health！ up:{}ms, down:{}ms rtt:{}ms", up, down, up + down));
+                    // });
+                    self.tunnel_status = TUNNEL_OK;
+                    self.logger.debug("create tunnel success!");
+                    return Ok(());
+                },
+                Err(err) => {
+                    self.logger.error(&format!("Failed to create {} tunnel: {:?}", tun_opts.protocol, err));
+                    return Err(err);
                 }
             }
+
         });
+        
+       if result.is_err() {
+            self.logger.error(&format!("Failed to create {} tunnel: {:?}", tun_opts.protocol, result.err()));
+            self.tunnel_status = TUNNEL_DISCONNECT;
+            return Err("Failed to create tunnel".into());
+       }
+       Ok(())
+    }
+
+    fn service_worker(&mut self) {
+        // let (tx, mut rx) = mpsc::channel(10); // 使用tokio的mpsc
+        // let mut proxy_server_tx: mpsc::Sender<BrowserObj> = tx.clone();
+        // tokio::spawn(async {
+        //     loop {
+        //         if self.tunnel_status != TUNNEL_OK {
+        //             if let Err(err) = self.setup_ws_connection() {
+        //                 eprintln!("Failed to setup ws connection: {:?}", err);
+        //                 self.tunnel_status = TUNNEL_DISCONNECT;
+        //                 continue;
+        //             }
+        //         }
+        //         // match self.req_ch.recv().await {
+        //         //     Some(ref request) => {
+        //         //         self.logger.info("handle browser request... ")
+        //         //         // let proxy_socket = request.proxy_socket;
+        //         //         // let st = self.stub_client.StartStream(proxy_socket.GetAddr());
+        //         //         // cli.browserProxy[st.Cid] = request
+        //         //     }
+        //         //     None => (),
+        //         // }
+        //     }
+        // });
     }
     pub fn bootstrap(&self) {
         self.service_worker();
-        let tunopts = match self.opts.tunnel_opts {
-            Some(tp) => tp,
-            None => panic!("missing tunnelOpts config"),
-        };
+        let tunopts = self.tunnel_opts.clone();
         if self.opts.listen_port <= 1024 && self.opts.listen_port >= 65535 {
             panic!("invalid port: {}", self.opts.listen_port);
         }
