@@ -38,7 +38,7 @@ pub struct BbkClient<'a> {
     // browser_proxy: HashMap<String, BrowserObj>, // 线程共享变量
 }
 
-impl BbkClient<'_> {
+impl<'a> BbkClient<'a> {
     pub fn new(opts: BbkCliOption) -> Self {
         println!("client new====");
         // let (tx, mut rx) = mpsc::channel(10); // 使用tokio的mpsc
@@ -57,7 +57,7 @@ impl BbkClient<'_> {
             tunnel_status: TUNNEL_INIT,
         }
     }
-    fn setup_ws_connection(&mut self) -> Result<(),Box<dyn Error>> {
+    fn setup_ws_connection(&'a mut self) -> Result<(),Box<dyn Error>> {
         let tun_opts = self.tunnel_opts.clone();
         self.logger.info(&format!("creating {} tunnel", tun_opts.protocol));
         let result: Result<(), retry::Error<_>> = retry(Exponential::from_millis(10).map(jitter).take(3),|| {
@@ -113,7 +113,7 @@ impl BbkClient<'_> {
         //     }
         // });
     }
-    pub fn bootstrap(&self) {
+    pub fn bootstrap(&mut self) {
         self.service_worker();
         let tunopts = self.tunnel_opts.clone();
         if self.opts.listen_port <= 1024 && self.opts.listen_port >= 65535 {

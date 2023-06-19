@@ -51,13 +51,13 @@ fn main() {
         let bbkopts: option::BbkCliOption = serde_json::from_str(&fscontent).unwrap();
         let jsonstr = serde_json::to_string_pretty(&bbkopts).unwrap();
         println!("bbkopts:\n{}!", jsonstr);
-        let cli = client::BbkClient::new(bbkopts);
+        let mut cli = client::BbkClient::new(bbkopts);
         cli.bootstrap()
     } else {
         let bbkopts: option::BbkSerOption = serde_json::from_str(&fscontent).unwrap();
         let jsonstr = serde_json::to_string_pretty(&bbkopts).unwrap();
         println!("bbkopts:\n{}!", jsonstr);
-        let svc = server::BbkServer::new(bbkopts);
+        let mut svc = server::BbkServer::new(bbkopts);
         svc.bootstrap()
     }
 }
