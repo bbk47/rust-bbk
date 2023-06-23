@@ -1,16 +1,18 @@
 use clap::Parser;
 use regex::Regex;
-use std::fs;
-
+use std::{
+    fs,
+    sync::{Arc, Mutex},
+};
 
 mod protocol;
 // 目录模块
 mod proxy;
-mod serve;
-mod utils;
-mod transport;
-mod stub;
 mod serializer;
+mod serve;
+mod stub;
+mod transport;
+mod utils;
 // 文件模块
 mod client;
 mod option;
@@ -24,8 +26,8 @@ pub struct Args {
     #[arg(short, long)]
     pub config: String,
 }
-
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = Args::parse();
     if args.config.is_empty() {
         println!("config file is missing!");
@@ -52,12 +54,12 @@ fn main() {
         let jsonstr = serde_json::to_string_pretty(&bbkopts).unwrap();
         println!("bbkopts:\n{}!", jsonstr);
         let mut cli = client::BbkClient::new(bbkopts);
-        cli.bootstrap()
+        cli.bootstrap().await
     } else {
         let bbkopts: option::BbkSerOption = serde_json::from_str(&fscontent).unwrap();
         let jsonstr = serde_json::to_string_pretty(&bbkopts).unwrap();
         println!("bbkopts:\n{}!", jsonstr);
         let mut svc = server::BbkServer::new(bbkopts);
-        svc.bootstrap()
+        svc.bootstrap().await
     }
 }

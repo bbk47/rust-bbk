@@ -2,7 +2,6 @@ use std::io::{Error, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
-
 use super::base::Transport;
 
 #[derive(Debug)]
@@ -32,6 +31,7 @@ impl Transport for TcpTransport {
     }
 
     fn close(&mut self) -> Result<(), Error> {
+        println!("close transport");
         self.conn.shutdown(std::net::Shutdown::Both)?;
         Ok(())
     }

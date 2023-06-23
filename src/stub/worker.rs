@@ -1,6 +1,8 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::{self, BufRead};
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -16,27 +18,41 @@ use crate::protocol::{self, split_frame};
 use crate::serializer::Serializer;
 use crate::transport::Transport;
 
-pub struct TunnelStub<'a> {
-    serizer: &'a Arc<Serializer>,
-    tsport: Arc<Box<dyn Transport+ Send + Sync>>,
+pub struct TunnelStub {
+    serizer: Arc<Box<Serializer>>,
+    tsport: Box<dyn Transport + Send + Sync>,
     streams: HashMap<String, Arc<CopyStream>>,
-    streamch_send: UnboundedSender<Arc<CopyStream>>,
-    streamch_recv: UnboundedReceiver<Arc<CopyStream>>,
+    streamch_send: UnboundedSender<CopyStream>,
+    streamch_recv: UnboundedReceiver<CopyStream>,
     sender_send: UnboundedSender<Frame>,
     sender_recv: UnboundedReceiver<Frame>,
     closech_send: UnboundedSender<()>,
     closech_recv: UnboundedReceiver<()>,
 }
 
-impl<'a> TunnelStub<'a> {
-    pub fn new(tsport: Arc<Box<dyn Transport + Send + Sync>>, serizer: &'a Arc<Serializer>) -> Self{
+// impl DerefMut for TunnelStub {
+//     fn deref_mut(&mut self) -> &mut Self::Target {
+//         self
+//     }
+// }
+
+// impl Deref for TunnelStub {
+//     type Target = Vec<u8>;
+
+//     fn deref(&self) -> &Self::Target {
+//         &self.tunnels
+//     }
+// }
+
+impl TunnelStub {
+    pub fn new(mut tsport: Box<dyn Transport + Send + Sync>, serizer: Arc<Box<Serializer>>) -> Self {
         let (streamch_send, streamch_recv) = mpsc::unbounded_channel();
         let (sender_send, sender_recv) = mpsc::unbounded_channel();
         let (closech_send, closech_recv) = mpsc::unbounded_channel();
 
-        let stub: TunnelStub<'a> = TunnelStub {
+        TunnelStub {
             serizer,
-            tsport,
+            tsport: tsport,
             streams: HashMap::new(),
             streamch_send: streamch_send,
             sender_send: sender_send,
@@ -44,21 +60,26 @@ impl<'a> TunnelStub<'a> {
             streamch_recv: streamch_recv,
             sender_recv: sender_recv,
             closech_recv: closech_recv,
-        };
+        }
+    }
 
+    pub fn start(&self) {
+        println!("setup read/write worker...");
         // let tsport_cloned = tsport.clone();
         // let serizer_cloned = serizer.clone();
         // let sender_send_cloned = sender_send.clone();
 
-        // let readworker = Self::read_worker(&stub, tsport_cloned, serizer_cloned, sender_send_cloned, closech_recv);
-        // let writeworker = Self::write_worker(&stub, sender_recv, closech_recv);
-        // tokio::spawn(readworker);
-        // tokio::spawn(writeworker);
+        // let stubwrap = RefCell::new(self);
+        // let stubwrap1 = stubwrap.clone();
+        // // let stubwrap2 = Box::new(stub);
 
-        stub
+        // // // let readworker = Self::read_worker(&stub, tsport_cloned, serizer_cloned, sender_send_cloned, closech_recv);
+        // let writeworker = Self::write_worker(stubwrap1);
+        // // // tokio::spawn(readworker);
+        // tokio::spawn(writeworker);
     }
 
-    fn read_worker(stub: &'a TunnelStub, tsport: Arc<dyn Transport>, serizer: Arc<Serializer>, sender_send: UnboundedSender<Frame>, closech: UnboundedReceiver<()>) {
+    fn read_worker(stub: &TunnelStub, tsport: Arc<dyn Transport>, serizer: Arc<Serializer>, sender_send: UnboundedSender<Frame>, closech: UnboundedReceiver<()>) {
         println!("TunnelStub read worker started");
         let cid = String::from("00000000000000000000000000000000");
         let mut last_ping = Instant::now();
@@ -93,17 +114,21 @@ impl<'a> TunnelStub<'a> {
         println!("TunnelStub read worker stopped");
     }
 
-    fn write_worker(stub: &'a TunnelStub, sender_recv: UnboundedReceiver<Frame>, close_recv: UnboundedReceiver<()>) {
+    async fn write_worker(stub: RefCell<&TunnelStub>) {
         println!("TunnelStub write worker started");
+        let mut ref1 = stub.borrow_mut();
         // loop {
         //     select!(
-        //         frame = sender_recv.recv() => {
-        //             if let Err(err) = stub.send_frame(frame) {
-        //                 eprintln!("Failed to send frame: {:?}", err);
-        //                 break;
-        //             }
+        //         frame = ref1.sender_recv.recv() => {
+        //                 if let Some(fm) = frame{
+        //                     if let Err(err) = ref1.send_frame(&fm) {
+        //                         eprintln!("Failed to send frame: {:?}", err);
+        //                         break;
+        //                     }
+        //                 }
+
         //         },
-        //         _ = close_recv.recv() => {
+        //         _ = ref1.closech_recv.recv() => {
         //             println!("TunnelStub write worker stopping due to close signal");
         //             break;
         //         }
@@ -112,28 +137,29 @@ impl<'a> TunnelStub<'a> {
         println!("TunnelStub write worker stopped");
     }
 
-    // fn send_frame(&self, frame: &Frame) -> io::Result<()> {
-    //     let frames = split_frame(frame);
-    //     for smallframe in &frames {
-    //         let binary_data = self.serizer.serialize(&smallframe);
-    //         println!("TunnelStub send frame: {} {} {}", smallframe.cid, smallframe.r#type, smallframe.data.len());
-    //         self.tsport.send_packet(&binary_data)?;
-    //     }
-    //     Ok(())
-    // }
+    fn send_frame(&mut self, frame: &Frame) -> io::Result<()> {
+        let frames = split_frame(frame);
+        for smallframe in &frames {
+            let binary_data = self.serizer.serialize(&smallframe);
+            println!("TunnelStub send frame: {} {} {}", smallframe.cid, smallframe.r#type, smallframe.data.len());
+            self.tsport.send_packet(&binary_data)?;
+        }
+        Ok(())
+    }
 
-
-    // pub fn start_stream(&self, addr: &[u8]) -> Arc<CopyStream> {
-    //     let cid = uuid::get_uuidv4();
-    //     let addrlen = addr.len();
-    //     let data = &addr[..addrlen];
-    //     let stream = CopyStream::new(cid, data.to_vec());
-    //     let arcstream = Arc::new(stream);
-    //     self.streams.insert(cid, arcstream);
-    //     let frame = Frame::new(cid, protocol::INIT_FRAME, data.to_vec());
-    //     self.sender_send.send(frame).unwrap();
-    //     arcstream
-    // }
+    pub fn start_stream(&self, addr: &[u8]) -> Arc<CopyStream> {
+        let cid = uuid::get_uuidv4();
+        let addrlen = addr.len();
+        let data = &addr[..addrlen];
+        let stream = CopyStream::new(cid.to_owned(), data.to_vec());
+        let stwrap = Arc::new(stream);
+        // self.streams.insert(cid, stwrap);
+        let frame = Frame::new(cid.to_owned(), protocol::INIT_FRAME, data.to_vec());
+        println!("send to transport====>>>>11");
+        self.sender_send.send(frame).unwrap();
+        println!("send to transport====>>>>22");
+        stwrap
+    }
 
     pub fn set_ready(&self, stream: &CopyStream) {
         let data = stream.addr.clone();
@@ -150,7 +176,7 @@ impl<'a> TunnelStub<'a> {
         self.sender_send.send(frame).unwrap();
     }
 
-    pub async fn accept(&mut self) -> Result<Arc<CopyStream>, Box<dyn Error>> {
+    pub async fn accept(&mut self) -> Result<CopyStream, Box<dyn Error>> {
         select!(
             ret = self.streamch_recv.recv() => {
                 match ret {

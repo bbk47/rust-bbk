@@ -1,19 +1,22 @@
+use futures::FutureExt;
 use retry::delay::jitter;
 use retry::{delay::Exponential, retry};
 use std::collections::HashMap;
 use std::error::Error;
-use std::println;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::{println, thread};
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TryRecvError;
+use tokio::time::sleep;
 
 use crate::serializer::Serializer;
-use crate::{proxy, utils, stub};
+use crate::{proxy, stub, utils};
 
 use crate::option::{BbkCliOption, TunnelOpts};
 use crate::proxy::ProxySocket;
 use crate::transport::{self, create_transport};
-use crate::utils::logger::{Logger, LogLevel};
+use crate::utils::logger::{LogLevel, Logger};
 
 const TUNNEL_INIT: u8 = 0x1;
 const TUNNEL_OK: u8 = 0x2;
@@ -25,20 +28,21 @@ struct BrowserObj {
     // stream_ch: mpsc::Sender<stub::Stream>,
 }
 
-pub struct BbkClient<'a> {
+pub struct BbkClient {
     opts: BbkCliOption,
     logger: Logger,
     tunnel_opts: TunnelOpts,
-    req_ch: mpsc::UnboundedReceiver<BrowserObj>,
+    req_recver: mpsc::UnboundedReceiver<BrowserObj>,
+    req_sender: mpsc::UnboundedSender<BrowserObj>,
     // retry_count: u8,
-    serizer: Arc<Serializer>,
+    serizer: Arc<Box<Serializer>>,
     tunnel_status: u8,
-    stub_client: Option<Arc<stub::TunnelStub<'a>>>,
+    stub_client: Option<Arc<stub::TunnelStub>>,
     // last_pong: u64,
     // browser_proxy: HashMap<String, BrowserObj>, // 线程共享变量
 }
 
-impl<'a> BbkClient<'a> {
+impl BbkClient {
     pub fn new(opts: BbkCliOption) -> Self {
         println!("client new====");
         // let (tx, mut rx) = mpsc::channel(10); // 使用tokio的mpsc
@@ -50,101 +54,128 @@ impl<'a> BbkClient<'a> {
         BbkClient {
             tunnel_opts: tunopts,
             opts: opts,
-            req_ch: rx,
-            serizer: Arc::new(serizer),
+            req_recver: rx,
+            req_sender: tx,
+            serizer: Arc::new(Box::new(serizer)),
             logger: logger,
-            stub_client:None,
+            stub_client: None,
             tunnel_status: TUNNEL_INIT,
         }
     }
-    fn setup_ws_connection(&'a mut self) -> Result<(),Box<dyn Error>> {
+    fn setup_ws_connection(&mut self) -> Result<(), Box<dyn Error>> {
         let tun_opts = self.tunnel_opts.clone();
         self.logger.info(&format!("creating {} tunnel", tun_opts.protocol));
-        let result: Result<(), retry::Error<_>> = retry(Exponential::from_millis(10).map(jitter).take(3),|| {
+        let result: Result<(), retry::Error<_>> = retry(Exponential::from_millis(10).map(jitter).take(3), || {
             match create_transport(&tun_opts) {
                 Ok(tsport) => {
-                    let arcts = Arc::new(tsport);
-                   let stub: stub::TunnelStub<'_> = stub::TunnelStub::new(arcts,&self.serizer);
-                   self.stub_client = Some(Arc::new(stub));
+                    let stub: stub::TunnelStub = stub::TunnelStub::new(tsport, self.serizer.clone());
+                    self.stub_client = Some(Arc::new(stub));
                     // self.stub_client.notify_pong(|up, down| {
                     //     self.logger.info(&format!("tunnel health！ up:{}ms, down:{}ms rtt:{}ms", up, down, up + down));
                     // });
+                    // stub.start();
                     self.tunnel_status = TUNNEL_OK;
                     self.logger.debug("create tunnel success!");
                     return Ok(());
-                },
+                }
                 Err(err) => {
                     self.logger.error(&format!("Failed to create {} tunnel: {:?}", tun_opts.protocol, err));
                     return Err(err);
                 }
             }
-
         });
-        
-       if result.is_err() {
+
+        if result.is_err() {
             self.logger.error(&format!("Failed to create {} tunnel: {:?}", tun_opts.protocol, result.err()));
             self.tunnel_status = TUNNEL_DISCONNECT;
             return Err("Failed to create tunnel".into());
-       }
-       Ok(())
+        }
+        Ok(())
     }
 
-    fn service_worker(&mut self) {
-        // let (tx, mut rx) = mpsc::channel(10); // 使用tokio的mpsc
-        // let mut proxy_server_tx: mpsc::Sender<BrowserObj> = tx.clone();
-        // tokio::spawn(async {
-        //     loop {
-        //         if self.tunnel_status != TUNNEL_OK {
-        //             if let Err(err) = self.setup_ws_connection() {
-        //                 eprintln!("Failed to setup ws connection: {:?}", err);
-        //                 self.tunnel_status = TUNNEL_DISCONNECT;
-        //                 continue;
-        //             }
-        //         }
-        //         // match self.req_ch.recv().await {
-        //         //     Some(ref request) => {
-        //         //         self.logger.info("handle browser request... ")
-        //         //         // let proxy_socket = request.proxy_socket;
-        //         //         // let st = self.stub_client.StartStream(proxy_socket.GetAddr());
-        //         //         // cli.browserProxy[st.Cid] = request
-        //         //     }
-        //         //     None => (),
-        //         // }
-        //     }
-        // });
+    pub fn service_worker(client: BbkClient) {
+        // let client2 = client.clone();
+        // let inc2 = client.clone();
     }
-    pub fn bootstrap(&mut self) {
-        self.service_worker();
+    pub async fn bootstrap(self) {
+        let opts = self.opts.clone();
         let tunopts = self.tunnel_opts.clone();
-        if self.opts.listen_port <= 1024 && self.opts.listen_port >= 65535 {
-            panic!("invalid port: {}", self.opts.listen_port);
-        }
-        if self.opts.listen_http_port <= 1024 && self.opts.listen_http_port >= 65535 {
-            panic!("invalid port: {}", self.opts.listen_http_port);
-        }
-        let port = self.opts.listen_port as u16;
+        let cli = Arc::new(Mutex::new(self));
 
-        let proxy_server = proxy::new_proxy_server(&self.opts.listen_addr, port).unwrap();
-        println!("Proxy server listening on {}", proxy_server.get_addr());
-
-        proxy_server.listen_conn(|tcpstream| {
-            // Handle incoming connections here
-            match proxy::socks5::new_socks5_proxy(tcpstream) {
-                Ok(proxy) => {
-                    let addr = proxy.get_addr();
-                    // println!("addr:{:?}", addr.to_vec());
-                    let ret: Result<utils::socks5::AddrInfo, Box<dyn Error>> = utils::socks5::AddrInfo::from_buffer(addr);
-                    if let Ok(addrinfo) = ret {
-                        println!("=====await socks5...{}:{}", addrinfo.address, addrinfo.port)
-                    } else {
-                        println!("=====exception addr socks5...");
+        let inc2 = cli.clone();
+        let inc3 = cli.clone();
+        tokio::spawn(async move {
+            loop {
+                thread::sleep(Duration::from_millis(10));
+                let mut lock_self = inc2.lock().unwrap();
+                // println!("server worker start, tunnel status:{}", lock_self.tunnel_status);
+                // tokio::time::sleep(Duration::from_secs(2)).await;
+                if lock_self.tunnel_status != TUNNEL_OK {
+                    if let Err(err) = lock_self.setup_ws_connection() {
+                        eprintln!("Failed to setup ws connection: {:?}", err);
+                        lock_self.tunnel_status = TUNNEL_DISCONNECT;
+                        continue;
                     }
                 }
-                Err(e) => {
-                    println!("socks5 proxy err:{}", e);
+                // println!("await request channel");
+                match lock_self.req_recver.try_recv() {
+                    Ok(ref request) => {
+                        lock_self.logger.info("handle browser request... ");
+                        let stub = lock_self.stub_client.as_ref().unwrap();
+                        let st = stub.start_stream(request.proxy_socket.get_addr());
+                        println!("reqcid:{}", st.cid);
+                        // cli.browserProxy[st.cid] = request
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        println!("channel is closed");
+                    }
+                    Err(TryRecvError::Empty) => {
+                        // println!("channel is empty.");
+                    }
                 }
-            };
+            }
         });
+
+        let _ = tokio::spawn(async move {
+            println!("exec here...");
+            if opts.listen_port <= 1024 && opts.listen_port >= 65535 {
+                panic!("invalid port: {}", opts.listen_port);
+            }
+            if opts.listen_http_port <= 1024 && opts.listen_http_port >= 65535 {
+                panic!("invalid port: {}", opts.listen_http_port);
+            }
+            let port = opts.listen_port as u16;
+
+            let proxy_server = proxy::new_proxy_server(&opts.listen_addr, port).unwrap();
+            println!("Proxy server listening on {}", proxy_server.get_addr());
+
+            proxy_server.listen_conn(|tcpstream| {
+                // Handle incoming connections here
+                match proxy::socks5::new_socks5_proxy(tcpstream) {
+                    Ok(proxy) => {
+                        let addr = proxy.get_addr();
+                        // println!("addr:{:?}", addr.to_vec());
+                        let ret: Result<utils::socks5::AddrInfo, Box<dyn Error>> = utils::socks5::AddrInfo::from_buffer(addr);
+                        if let Ok(addrinfo) = ret {
+                            println!("=====await socks5...{}:{}", addrinfo.address, addrinfo.port);
+                            let reqobj = BrowserObj {
+                                cid: "00000000000000000000000000000000".to_owned(),
+                                proxy_socket: proxy,
+                            };
+                            let cli = inc3.lock().unwrap();
+                            cli.logger.info("send request===");
+                            let _ = cli.req_sender.send(reqobj);
+                        } else {
+                            println!("=====exception addr socks5...");
+                        }
+                    }
+                    Err(e) => {
+                        println!("socks5 proxy err:{}", e);
+                    }
+                };
+            });
+        })
+        .await;
 
         // let httpport = self.opts.listen_http_port as u16;
 

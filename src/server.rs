@@ -16,7 +16,7 @@ use crate::transport::{self, TcpTransport, Transport};
 pub struct BbkServer {
     opts: BbkSerOption,
     logger: Logger,
-    serizer: Arc<Serializer>,
+    serizer: Arc<Box<Serializer>>,
 }
 
 impl BbkServer {
@@ -27,7 +27,7 @@ impl BbkServer {
         BbkServer {
             opts: opts,
             logger,
-            serizer: Arc::new(serizer),
+            serizer: Arc::new(Box::new(serizer)),
         }
     }
 
@@ -36,11 +36,10 @@ impl BbkServer {
         // let tsport = wrap_tunnel(tunconn);
         let conn = tunconn.tcp_socket.try_clone().unwrap();
         println!("tsport:{:?}", &conn);
-        let tcpts = TcpTransport{conn};
-        let tsport: Arc<Box<dyn Transport + Send + Sync>> = Arc::new(Box::new(tcpts));
-
-        let mut server_stub = TunnelStub::new(tsport, &self.serizer);
-
+        let tcpts = TcpTransport { conn };
+        // let tsport: Arc<Box<dyn Transport + Send + Sync>> = Arc::new(Box::new(tcpts));
+        let mut server_stub = TunnelStub::new(Box::new(tcpts), self.serizer.clone());
+        println!("exec here loop await stream===");
         loop {
             match server_stub.accept().await {
                 Ok(stream) => {
@@ -75,7 +74,7 @@ impl BbkServer {
         }
     }
 
-    fn init_server(&self) {
+    async fn init_server(&self) {
         if self.opts.listen_port <= 1024 && self.opts.listen_port >= 65535 {
             panic!("invalid port: {}", self.opts.listen_port);
         }
@@ -97,24 +96,20 @@ impl BbkServer {
         //     // 处理新连接的代码
         // }
 
-        let mut rt = Runtime::new().unwrap();
-
-        rt.block_on(async {
-            // 这里是需要异步执行的代码
-            for tunnel in server {
-                match tunnel {
-                    Ok(tun) => {
-                        // 对新连接进行处理
-                        // 处理完成后关闭连接
-                        println!("new connection coming...");
-                        self.handle_connection(&tun).await;
-                    }
-                    Err(e) => {
-                        eprintln!("Error: {}", e);
-                    }
+        // 这里是需要异步执行的代码
+        for tunnel in server {
+            match tunnel {
+                Ok(tun) => {
+                    // 对新连接进行处理
+                    // 处理完成后关闭连接
+                    println!("new connection coming...");
+                    self.handle_connection(&tun).await;
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
                 }
             }
-        });
+        }
 
         // self.logger.info(&format!("server listen on {:?}", server.get_addr()));
         // server.listen_conn(|t: &TunnelConn| self.handle_connection(t));
@@ -128,7 +123,7 @@ impl BbkServer {
     //         .map_err(|e| -> Box<dyn Error> { Box::new(e) })
     // }
 
-    pub fn bootstrap(&self) {
-        self.init_server();
+    pub async fn bootstrap(&self) {
+        self.init_server().await
     }
 }
