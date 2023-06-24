@@ -1,11 +1,10 @@
-use std::{net::TcpStream, io::Write};
+use std::{error::Error, io::Write, net::TcpStream};
 
 pub trait Transport {
-    fn send_packet(&mut self, data: &[u8]) -> std::io::Result<()>;
-    fn read_packet(&mut self) -> std::io::Result<Vec<u8>>;
-    fn close(&mut self) -> std::io::Result<()>;
+    fn send_packet(&mut self, data: &[u8]) -> Result<(), std::io::Error>;
+    fn read_packet(&mut self) -> Result<Vec<u8>, std::io::Error>;
+    fn close(&self) -> Result<(), std::io::Error>;
 }
-
 
 pub fn send_stream_socket(socket: &mut TcpStream, data: &[u8]) -> std::io::Result<()> {
     let length = data.len();
@@ -16,6 +15,6 @@ pub fn send_stream_socket(socket: &mut TcpStream, data: &[u8]) -> std::io::Resul
     socket.write_all(&data2)
 }
 
-// pub fn send_ws_socket(wss: &mut websocket::sender, data: &[u8]) -> std::io::Result<()> {
+// pub fn send_ws_socket(wss: &mut websocket::sender, data: &[u8]) -> Result<()> {
 //     wss.write_message(websocket::OwnedMessage::Binary(data.to_vec()))
 // }

@@ -15,7 +15,7 @@ use crate::{proxy, stub, utils};
 
 use crate::option::{BbkCliOption, TunnelOpts};
 use crate::proxy::ProxySocket;
-use crate::transport::{self, create_transport};
+use crate::transport::{self, create_transport, Transport};
 use crate::utils::logger::{LogLevel, Logger};
 
 const TUNNEL_INIT: u8 = 0x1;
@@ -62,35 +62,23 @@ impl BbkClient {
             tunnel_status: TUNNEL_INIT,
         }
     }
-    fn setup_ws_connection(&mut self) -> Result<(), Box<dyn Error>> {
+    fn setup_ws_connection(&mut self) -> Result<stub::TunnelStub, Box<dyn Error>> {
         let tun_opts = self.tunnel_opts.clone();
         self.logger.info(&format!("creating {} tunnel", tun_opts.protocol));
-        let result: Result<(), retry::Error<_>> = retry(Exponential::from_millis(10).map(jitter).take(3), || {
-            match create_transport(&tun_opts) {
-                Ok(tsport) => {
-                    let stub: stub::TunnelStub = stub::TunnelStub::new(tsport, self.serizer.clone());
-                    self.stub_client = Some(Arc::new(stub));
-                    // self.stub_client.notify_pong(|up, down| {
-                    //     self.logger.info(&format!("tunnel health！ up:{}ms, down:{}ms rtt:{}ms", up, down, up + down));
-                    // });
-                    // stub.start();
-                    self.tunnel_status = TUNNEL_OK;
-                    self.logger.debug("create tunnel success!");
-                    return Ok(());
-                }
-                Err(err) => {
-                    self.logger.error(&format!("Failed to create {} tunnel: {:?}", tun_opts.protocol, err));
-                    return Err(err);
-                }
+        let result: Result<stub::TunnelStub, retry::Error<_>> = retry(Exponential::from_millis(10).map(jitter).take(3), || match create_transport(&tun_opts) {
+            Ok(tsport) => {
+                let stub: stub::TunnelStub = stub::TunnelStub::new(tsport, self.serizer.clone());
+                return Ok(stub);
+            }
+            Err(err) => {
+                return Err(err);
             }
         });
 
         if result.is_err() {
-            self.logger.error(&format!("Failed to create {} tunnel: {:?}", tun_opts.protocol, result.err()));
-            self.tunnel_status = TUNNEL_DISCONNECT;
             return Err("Failed to create tunnel".into());
         }
-        Ok(())
+        Ok(result.unwrap())
     }
 
     pub fn service_worker(client: BbkClient) {
@@ -106,15 +94,25 @@ impl BbkClient {
         let inc3 = cli.clone();
         tokio::spawn(async move {
             loop {
-                thread::sleep(Duration::from_millis(10));
+                sleep(Duration::from_millis(100)).await;
                 let mut lock_self = inc2.lock().unwrap();
-                // println!("server worker start, tunnel status:{}", lock_self.tunnel_status);
+                println!("server worker start, tunnel status:{}", lock_self.tunnel_status);
                 // tokio::time::sleep(Duration::from_secs(2)).await;
                 if lock_self.tunnel_status != TUNNEL_OK {
-                    if let Err(err) = lock_self.setup_ws_connection() {
-                        eprintln!("Failed to setup ws connection: {:?}", err);
-                        lock_self.tunnel_status = TUNNEL_DISCONNECT;
-                        continue;
+                    match lock_self.setup_ws_connection() {
+                        Ok(worker) => {
+                            worker.start();
+                            lock_self.tunnel_status = TUNNEL_OK;
+                            lock_self.stub_client = Some(Arc::new(worker));
+                            // println!("tunnel setup success.");
+                        }
+                        Err(er) => {
+                            eprintln!("Failed to setup ws connection: {:?}", er);
+                            lock_self.tunnel_status = TUNNEL_DISCONNECT;
+                            // sleep(Duration::from_millis(1000 * 3)).await; // retry it
+                            // thread::sleep(Duration::from_millis(1000 * 3));
+                            continue;
+                        }
                     }
                 }
                 // println!("await request channel");
@@ -127,10 +125,10 @@ impl BbkClient {
                         // cli.browserProxy[st.cid] = request
                     }
                     Err(TryRecvError::Disconnected) => {
-                        println!("channel is closed");
+                        println!("request channel is closed");
                     }
                     Err(TryRecvError::Empty) => {
-                        // println!("channel is empty.");
+                        println!("request channel is empty.");
                     }
                 }
             }

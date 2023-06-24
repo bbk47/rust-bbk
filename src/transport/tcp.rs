@@ -30,7 +30,7 @@ impl Transport for TcpTransport {
         Ok(databuf)
     }
 
-    fn close(&mut self) -> Result<(), Error> {
+    fn close(&self) -> Result<(), Error> {
         println!("close transport");
         self.conn.shutdown(std::net::Shutdown::Both)?;
         Ok(())

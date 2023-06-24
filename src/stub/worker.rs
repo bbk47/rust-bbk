@@ -2,13 +2,14 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::{self, BufRead};
-use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::select;
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::time::sleep;
 
 use crate::utils::{get_timestamp, uuid};
 
@@ -20,14 +21,12 @@ use crate::transport::Transport;
 
 pub struct TunnelStub {
     serizer: Arc<Box<Serializer>>,
-    tsport: Box<dyn Transport + Send + Sync>,
-    streams: HashMap<String, Arc<CopyStream>>,
+    tsport: Arc<Mutex<Box<dyn Transport + Send + Sync>>>,
+    // streams: HashMap<String, Arc<CopyStream>>,
     streamch_send: UnboundedSender<CopyStream>,
-    streamch_recv: UnboundedReceiver<CopyStream>,
     sender_send: UnboundedSender<Frame>,
-    sender_recv: UnboundedReceiver<Frame>,
-    closech_send: UnboundedSender<()>,
-    closech_recv: UnboundedReceiver<()>,
+    streamch_recv: UnboundedReceiver<CopyStream>,
+    sender_recv: Arc<Mutex<UnboundedReceiver<Frame>>>,
 }
 
 // impl DerefMut for TunnelStub {
@@ -46,106 +45,105 @@ pub struct TunnelStub {
 
 impl TunnelStub {
     pub fn new(mut tsport: Box<dyn Transport + Send + Sync>, serizer: Arc<Box<Serializer>>) -> Self {
-        let (streamch_send, streamch_recv) = mpsc::unbounded_channel();
-        let (sender_send, sender_recv) = mpsc::unbounded_channel();
-        let (closech_send, closech_recv) = mpsc::unbounded_channel();
+        let (streamch_send, mut streamch_recv) = mpsc::unbounded_channel();
+        let (sender_send, mut sender_recv) = mpsc::unbounded_channel();
 
-        TunnelStub {
+        println!("new tunnel stub worker.");
+        let stub = TunnelStub {
             serizer,
-            tsport: tsport,
-            streams: HashMap::new(),
-            streamch_send: streamch_send,
-            sender_send: sender_send,
-            closech_send: closech_send,
+            tsport: Arc::new(Mutex::new(tsport)),
+            // streams: HashMap::new(),
+            streamch_send: streamch_send.clone(),
+            sender_send: sender_send.clone(),
             streamch_recv: streamch_recv,
-            sender_recv: sender_recv,
-            closech_recv: closech_recv,
-        }
+            sender_recv: Arc::new(Mutex::new(sender_recv)),
+            // closech_recv: closech_recv,
+        };
+
+        stub
     }
 
     pub fn start(&self) {
-        println!("setup read/write worker...");
-        // let tsport_cloned = tsport.clone();
-        // let serizer_cloned = serizer.clone();
         // let sender_send_cloned = sender_send.clone();
+        let recver = self.sender_recv.clone();
+        println!("start====stub");
+        let serizer1: Arc<Box<Serializer>> = self.serizer.clone();
+        let serizer2 = self.serizer.clone();
+        let tsport1 = self.tsport.clone();
+        let tsport2 = self.tsport.clone();
 
-        // let stubwrap = RefCell::new(self);
-        // let stubwrap1 = stubwrap.clone();
-        // // let stubwrap2 = Box::new(stub);
+        // read worker
+        tokio::spawn(async move {
+            println!("read worker started");
+            'read_loop: loop {
+                sleep(Duration::from_millis(1000)).await;
+                // thread::sleep(Duration::from_millis(1000));
+                println!("read tick ===");
+                println!("read packet...");
+                let packet = match tsport1.lock().unwrap().read_packet() {
+                    Ok(packet) => packet,
+                    Err(err) => {
+                        eprintln!("Transport read packet error: {:?}", err);
+                        break 'read_loop;
+                    }
+                };
 
-        // // // let readworker = Self::read_worker(&stub, tsport_cloned, serizer_cloned, sender_send_cloned, closech_recv);
-        // let writeworker = Self::write_worker(stubwrap1);
-        // // // tokio::spawn(readworker);
-        // tokio::spawn(writeworker);
+                if let Ok(frame) = serizer2.deserialize(&packet) {
+                    // println!(
+                    //     "TunnelStub read frame: {} {} {}",
+                    //     frame.cid,
+                    //     frame.frame_type,
+                    //     frame.content_length()
+                    // );
+
+                    println!("recv frame type:{}", frame.r#type);
+                }
+            }
+            println!("read worker stoped");
+        });
+        tokio::spawn(async move {
+            println!("write worker started");
+            'writeloop: loop {
+                sleep(Duration::from_millis(1000)).await;
+                // thread::sleep(Duration::from_millis(1000));
+                println!("write tick ===");
+                let mut rec = recver.lock().unwrap();
+                match rec.try_recv() {
+                    Ok(ref fm) => {
+                        let frames = split_frame(fm);
+                        for smallframe in &frames {
+                            let binary_data = serizer1.serialize(&smallframe);
+                            println!("TunnelStub send frame: {} {} {}", smallframe.cid, smallframe.r#type, smallframe.data.len());
+                            println!("resolve tsparc2");
+                            // let mut ts = tsparc2.borrow_mut();
+                            if let Err(er) = tsport2.lock().unwrap().send_packet(&binary_data) {
+                                eprintln!("Failed to send frame: {:?}", er);
+                                break 'writeloop;
+                            }
+                        }
+                        println!("send====after")
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        println!("channel is closed 1");
+                    }
+                    Err(TryRecvError::Empty) => {
+                        println!("channel is empty.");
+                    }
+                }
+            }
+            println!("write worker stoped");
+        });
+        println!("start complete.");
     }
-
-    fn read_worker(stub: &TunnelStub, tsport: Arc<dyn Transport>, serizer: Arc<Serializer>, sender_send: UnboundedSender<Frame>, closech: UnboundedReceiver<()>) {
-        println!("TunnelStub read worker started");
-        let cid = String::from("00000000000000000000000000000000");
-        let mut last_ping = Instant::now();
-
-        // 'read_loop: loop {
-        //     select!(
-        //         _ = closech.recv() => {
-        //         println!("TunnelStub read worker stopping due to close signal");
-        //         break 'read_loop;
-        //         },
-        //     _ = async {} => {
-        //         let packet = match tsport.read_packet() {
-        //             Ok(packet) => packet,
-        //             Err(err) => {
-        //                 eprintln!("Transport read packet error: {:?}", err);
-        //                 break 'read_loop;
-        //             }
-        //         };
-
-        //         if let Ok(frame) = serizer.deserialize(&packet) {
-        //             // println!(
-        //             //     "TunnelStub read frame: {} {} {}",
-        //             //     frame.cid,
-        //             //     frame.frame_type,
-        //             //     frame.content_length()
-        //             // );
-
-        //             println!("recv frame type:{}",frame.r#type);
-        //         }
-        //     })
-        // }
-        println!("TunnelStub read worker stopped");
-    }
-
-    async fn write_worker(stub: RefCell<&TunnelStub>) {
-        println!("TunnelStub write worker started");
-        let mut ref1 = stub.borrow_mut();
-        // loop {
-        //     select!(
-        //         frame = ref1.sender_recv.recv() => {
-        //                 if let Some(fm) = frame{
-        //                     if let Err(err) = ref1.send_frame(&fm) {
-        //                         eprintln!("Failed to send frame: {:?}", err);
-        //                         break;
-        //                     }
-        //                 }
-
-        //         },
-        //         _ = ref1.closech_recv.recv() => {
-        //             println!("TunnelStub write worker stopping due to close signal");
-        //             break;
-        //         }
-        //     );
-        // }
-        println!("TunnelStub write worker stopped");
-    }
-
-    fn send_frame(&mut self, frame: &Frame) -> io::Result<()> {
-        let frames = split_frame(frame);
-        for smallframe in &frames {
-            let binary_data = self.serizer.serialize(&smallframe);
-            println!("TunnelStub send frame: {} {} {}", smallframe.cid, smallframe.r#type, smallframe.data.len());
-            self.tsport.send_packet(&binary_data)?;
-        }
-        Ok(())
-    }
+    // fn send_frame(&mut self, frame: &Frame) -> io::Result<()> {
+    //     let frames = split_frame(frame);
+    //     for smallframe in &frames {
+    //         let binary_data = self.serizer.serialize(&smallframe);
+    //         println!("TunnelStub send frame: {} {} {}", smallframe.cid, smallframe.r#type, smallframe.data.len());
+    //         self.tsport.send_packet(&binary_data)?;
+    //     }
+    //     Ok(())
+    // }
 
     pub fn start_stream(&self, addr: &[u8]) -> Arc<CopyStream> {
         let cid = uuid::get_uuidv4();
@@ -176,20 +174,18 @@ impl TunnelStub {
         self.sender_send.send(frame).unwrap();
     }
 
-    pub async fn accept(&mut self) -> Result<CopyStream, Box<dyn Error>> {
-        select!(
-            ret = self.streamch_recv.recv() => {
-                match ret {
-                    Some(stream) => Ok(stream),
-                    None => {
-                        Err("recv None".into())
-                    },
-                }
-            },
-            _ = self.closech_recv.recv() => {
-                println!("TunnelStub write worker stopping due to close signal");
-                Err("closed transport".into())
-            }
-        )
+    pub fn accept(&mut self) -> Result<CopyStream, TryRecvError> {
+        match self.streamch_recv.try_recv() {
+            Ok(st) => Ok(st),
+            Err(TryRecvError::Disconnected) => Err(TryRecvError::Disconnected),
+            Err(TryRecvError::Empty) => Err(TryRecvError::Empty),
+        }
     }
+    // pub async fn accept(&mut self) -> Result<CopyStream, TryRecvError> {
+    //     let st = self.streamch_recv.recv().await;
+    //     match st {
+    //         Some(st) => Ok(st),
+    //         None => Err(TryRecvError::Empty),
+    //     }
+    // }
 }
