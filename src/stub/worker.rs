@@ -21,7 +21,7 @@ use crate::transport::Transport;
 
 pub struct TunnelStub {
     serizer: Arc<Box<Serializer>>,
-    tsport: Arc<Mutex<Box<dyn Transport + Send + Sync>>>,
+    tsport: Arc<Box<dyn Transport + Send + Sync>>,
     // streams: HashMap<String, Arc<CopyStream>>,
     streamch_send: UnboundedSender<CopyStream>,
     sender_send: UnboundedSender<Frame>,
@@ -51,7 +51,7 @@ impl TunnelStub {
         println!("new tunnel stub worker.");
         let stub = TunnelStub {
             serizer,
-            tsport: Arc::new(Mutex::new(tsport)),
+            tsport: Arc::new(tsport),
             // streams: HashMap::new(),
             streamch_send: streamch_send.clone(),
             sender_send: sender_send.clone(),
@@ -80,14 +80,14 @@ impl TunnelStub {
                 // thread::sleep(Duration::from_millis(1000));
                 println!("read tick ===");
                 println!("read packet...");
-                let packet = match tsport1.lock().unwrap().read_packet() {
+                let packet = match tsport1.read_packet() {
                     Ok(packet) => packet,
                     Err(err) => {
                         eprintln!("Transport read packet error: {:?}", err);
                         break 'read_loop;
                     }
                 };
-
+                println!("read data===");
                 if let Ok(frame) = serizer2.deserialize(&packet) {
                     // println!(
                     //     "TunnelStub read frame: {} {} {}",
@@ -116,7 +116,7 @@ impl TunnelStub {
                             println!("TunnelStub send frame: {} {} {}", smallframe.cid, smallframe.r#type, smallframe.data.len());
                             println!("resolve tsparc2");
                             // let mut ts = tsparc2.borrow_mut();
-                            if let Err(er) = tsport2.lock().unwrap().send_packet(&binary_data) {
+                            if let Err(er) = tsport2.send_packet(&binary_data) {
                                 eprintln!("Failed to send frame: {:?}", er);
                                 break 'writeloop;
                             }

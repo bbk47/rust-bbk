@@ -14,18 +14,18 @@ unsafe impl Sync for TcpTransport {}
 unsafe impl Send for TcpTransport {}
 
 impl Transport for TcpTransport {
-    fn send_packet(&mut self, data: &[u8]) -> Result<(), Error> {
-        self.conn.write_all(data)?;
+    fn send_packet(&self, data: &[u8]) -> Result<(), Error> {
+        (&self.conn).write_all(data)?;
         Ok(())
     }
 
-    fn read_packet(&mut self) -> Result<Vec<u8>, Error> {
+    fn read_packet(&self) -> Result<Vec<u8>, Error> {
         let mut lenbuf = [0u8; 2];
-        self.conn.read_exact(&mut lenbuf)?;
+        (&self.conn).read_exact(&mut lenbuf)?;
 
         let length = (lenbuf[0] as usize) << 8 | lenbuf[1] as usize;
         let mut databuf = vec![0u8; length];
-        self.conn.read_exact(&mut databuf)?;
+        (&self.conn).read_exact(&mut databuf)?;
 
         Ok(databuf)
     }

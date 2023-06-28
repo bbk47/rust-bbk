@@ -96,7 +96,7 @@ impl BbkClient {
             loop {
                 sleep(Duration::from_millis(100)).await;
                 let mut lock_self = inc2.lock().unwrap();
-                println!("server worker start, tunnel status:{}", lock_self.tunnel_status);
+                // println!("server worker start, tunnel status:{}", lock_self.tunnel_status);
                 // tokio::time::sleep(Duration::from_secs(2)).await;
                 if lock_self.tunnel_status != TUNNEL_OK {
                     match lock_self.setup_ws_connection() {
@@ -128,7 +128,7 @@ impl BbkClient {
                         println!("request channel is closed");
                     }
                     Err(TryRecvError::Empty) => {
-                        println!("request channel is empty.");
+                        // println!("request channel is empty.");
                     }
                 }
             }

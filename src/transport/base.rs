@@ -1,8 +1,8 @@
 use std::{error::Error, io::Write, net::TcpStream};
 
 pub trait Transport {
-    fn send_packet(&mut self, data: &[u8]) -> Result<(), std::io::Error>;
-    fn read_packet(&mut self) -> Result<Vec<u8>, std::io::Error>;
+    fn send_packet(&self, data: &[u8]) -> Result<(), std::io::Error>;
+    fn read_packet(&self) -> Result<Vec<u8>, std::io::Error>;
     fn close(&self) -> Result<(), std::io::Error>;
 }
 
