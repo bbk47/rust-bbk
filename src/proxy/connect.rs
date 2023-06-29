@@ -33,7 +33,7 @@ pub fn new_connect_proxy(mut conn: TcpStream) -> Result<ProxySocket, Box<dyn Err
 
     let port: u16 = port.parse().unwrap();
     // build socks5 address data
-    let addr_data = utils::socks5::build_socks5_address_data(hostname, port)?;
+    let addr_data = utils::socks5::build_socks5_buffer(hostname, port)?;
     let s = ProxySocket::new(addr_data, conn);
     Ok(s)
 }

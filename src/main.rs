@@ -26,8 +26,7 @@ pub struct Args {
     #[arg(short, long)]
     pub config: String,
 }
-#[tokio::main]
-async fn main() {
+fn main() {
     let args = Args::parse();
     if args.config.is_empty() {
         println!("config file is missing!");
@@ -54,12 +53,12 @@ async fn main() {
         let jsonstr = serde_json::to_string_pretty(&bbkopts).unwrap();
         println!("bbkopts:\n{}!", jsonstr);
         let mut cli = client::BbkClient::new(bbkopts);
-        cli.bootstrap().await
+        cli.bootstrap()
     } else {
         let bbkopts: option::BbkSerOption = serde_json::from_str(&fscontent).unwrap();
         let jsonstr = serde_json::to_string_pretty(&bbkopts).unwrap();
         println!("bbkopts:\n{}!", jsonstr);
         let mut svc = server::BbkServer::new(bbkopts);
-        svc.bootstrap().await
+        svc.bootstrap()
     }
 }

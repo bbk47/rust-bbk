@@ -47,7 +47,7 @@ pub fn new_socks5_proxy(mut conn: TcpStream) -> Result<ProxySocket, Box<dyn Erro
     };
 
     let add_buf = &buf[..addrlen];
-    conn.write_all(&[0x05u8, 0x00u8, 0x00u8, 0x01u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8])?;
+    conn.write_all(&[0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])?;
 
     let s = ProxySocket::new(add_buf.to_vec(), conn);
     Ok(s)
