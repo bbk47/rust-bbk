@@ -1,8 +1,12 @@
-use std::{io::{self, Read, Write}, net::TcpStream};
+use std::{
+    error::Error,
+    io::{self, Read, Write},
+    net::TcpStream,
+};
 
 pub struct ProxySocket {
     addr_buf: Vec<u8>,
-    conn: TcpStream,
+    pub conn: TcpStream,
 }
 
 impl ProxySocket {
@@ -25,4 +29,10 @@ impl ProxySocket {
     pub fn get_addr(&self) -> &[u8] {
         &self.addr_buf[..]
     }
+    // pub fn try_clone(&self) -> Option<Self> {
+    //     let addr_buf = self.addr_buf.clone();
+    //     let conn = self.conn.try_clone().unwrap();
+    //     let cloned = ProxySocket { addr_buf, conn };
+    //     Some(cloned)
+    // }
 }

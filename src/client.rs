@@ -5,7 +5,8 @@ use std::error::Error;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::{println, thread};
+use std::{println, thread, io};
+use std::collections::HashMap;
 
 use crate::serializer::Serializer;
 use crate::{proxy, stub, utils};
@@ -28,6 +29,7 @@ struct BrowserObj {
 pub struct BbkClient {
     opts: BbkCliOption,
     logger: Logger,
+    browser_proxys: Arc<Mutex<HashMap<String, Arc<BrowserObj>>>>,
     tunnel_opts: TunnelOpts,
     req_recver: Receiver<BrowserObj>,
     req_sender: Sender<BrowserObj>,
@@ -54,6 +56,7 @@ impl BbkClient {
         BbkClient {
             tunnel_opts: tunopts,
             opts: opts,
+            browser_proxys:Arc::new(Mutex::new(HashMap::new())),
             req_recver: rx,
             req_sender: tx,
             ping_sender:ping_tx,
@@ -90,6 +93,7 @@ impl BbkClient {
     pub fn bootstrap(&mut self) {
         let opts = self.opts.clone();
         let tunopts = self.tunnel_opts.clone();
+        let browser_proxys1 = self.browser_proxys.clone();
 
         let reqsender1 = self.req_sender.clone();
 
@@ -136,6 +140,7 @@ impl BbkClient {
             thread::sleep(Duration::from_millis(1000));
             // println!("server worker start, tunnel status:{}", lock_self.tunnel_status);
             // tokio::time::sleep(Duration::from_secs(2)).await;
+           
             if self.tunnel_status != TUNNEL_OK {
                 match self.setup_ws_connection() {
                     Ok(worker) => {
@@ -143,12 +148,48 @@ impl BbkClient {
                         self.tunnel_status = TUNNEL_OK;
                         let worker_arc = Arc::new(Mutex::new(worker));
                         let worker_arc2 = worker_arc.clone();
+                        let worker_arc3 = worker_arc.clone();
+                        let proxys = self.browser_proxys.clone();
                         self.stub_client = Some(worker_arc);
                         // println!("tunnel setup success.");
                         // thread::spawn(move || loop {
                         //     thread::sleep(Duration::from_millis(3000));
                         //     worker_arc2.lock().unwrap().ping();
                         // });
+                        thread::spawn(move || loop{
+                                thread::sleep(Duration::from_millis(1000));
+                                let stub = worker_arc3.lock().unwrap();
+                                match stub.streamch_recv.try_recv() {
+                                    Ok(stream) => {
+                                        println!("stream ===> addr:{:?}", &stream.addr);
+                                        let cid = stream.cid.clone();
+                                        let browser_proxys = proxys.lock().unwrap();
+                                        let browserobj_ret = browser_proxys.get(&cid);
+                                        if let Some(browser_obj) = browserobj_ret {
+                                            // handle brower socket to stream
+                                            let mut browser_socket1 = browser_obj.proxy_socket.conn.try_clone().unwrap();
+                                            let mut browser_socket2 = browser_socket1.try_clone().unwrap();
+                                            let mut v_stream1= stream.try_clone().unwrap();
+                                            let mut v_stream2 = stream.try_clone().unwrap();
+                                            thread::spawn(move || {
+                                                 println!("copy browser to stream====1");
+                                                let _ = io::copy(&mut browser_socket1, &mut v_stream1);
+                                                println!("copy virtual stream to client complete or error...1");
+                                            });
+                                            thread::spawn(move ||{
+                                                println!("copy stream to browser====2");
+                                                let _ = io::copy(&mut v_stream2, &mut browser_socket2);
+                                                println!("copy client to virtual stream complete or error...2");
+                                            });
+                                         
+                                        }
+
+                                    }
+                                    Err(err) => {
+                                        // eprintln!("err:{:?}",err);
+                                    }
+                                }
+                        });
                     }
                     Err(er) => {
                         eprintln!("Failed to setup ws connection: {:?}", er);
@@ -167,7 +208,9 @@ impl BbkClient {
                         let stub2 = stub.lock().unwrap();
                         let st = stub2.start_stream(request.proxy_socket.get_addr());
                         println!("reqcid:{}", st.cid);
+                        let mut brower_proxys = browser_proxys1.lock().unwrap();
                         request.cid = st.cid.clone();
+                        brower_proxys.insert(st.cid.clone(), Arc::new(request));
                     }
                  
                     // cli.browserProxy[st.cid] = request

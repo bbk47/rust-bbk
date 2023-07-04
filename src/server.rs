@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt::Debug;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
-use std::thread;
+use std::{thread, io};
 use std::time::Duration;
 
 
@@ -80,18 +80,22 @@ impl BbkServer {
                                         
                                         if let Ok(socket) = conn {
                                             logger2.info(&format!("DIAL SUCCESS==>{}", &addstr));
-                                            // server_stub.set_ready(&stream);
-    
-                                            // thread::spawn( move {
-                                            //     if let Err(err) = stream.clone().forward(&mut socket).await {
-                                            //         self.logger.error(&format!("stream error:{}", err));
-                                            //     }
-                                            // });
-                                            // thread::spawn( move {
-                                            //     if let Err(err) = socket.clone().forward(&mut stream).await {
-                                            //         self.logger.error(&format!("stream error:{}", err));
-                                            //     }
-                                            // });
+                                            server_stub.set_ready(&stream);
+
+                                            let mut socket_writer = socket.try_clone().unwrap();
+                                            let mut socket_reader = socket.try_clone().unwrap();
+                                            
+                                            println!("handle stream  to remote");
+                                            let mut v_stream1= stream.try_clone().unwrap();
+                                            let mut v_stream2 = stream.try_clone().unwrap();
+                                            thread::spawn(move || {
+                                                let _ = io::copy(&mut v_stream1, &mut socket_writer);
+                                                println!("copy virtual stream to remote complete or error...1");
+                                            });
+                                            thread::spawn(move ||{
+                                                let _ = io::copy(&mut socket_reader, &mut v_stream2);
+                                                println!("copy remote to virtual stream complete or error...2");
+                                            });
                                         }
                                     }
                                    
