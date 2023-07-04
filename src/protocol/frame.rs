@@ -100,7 +100,7 @@ pub fn decode(binary_data: &[u8]) -> Result<Frame, String> {
 
     // check if the binary data has enough bytes to hold the specified data length
     let data_start = cid_len + 5;
-    println!("data_start:{}, data_len:{}", data_start, data_len);
+    // println!("data_start:{}, data_len:{}", data_start, data_len);
     if binary_data.len() < data_start + data_len {
         return Err("Invalid binary data length3".to_string());
     }

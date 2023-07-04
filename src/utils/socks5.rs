@@ -9,7 +9,7 @@ struct InvalidAddressType;
 
 impl Display for InvalidAddressType {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid host type")
+        write!(f, "invalid address type")
     }
 }
 
@@ -38,6 +38,7 @@ impl AddrInfo {
                 let domain_end = 2 + domain_length;
                 let host: String = String::from_utf8_lossy(&buffer[2..domain_end]).to_string();
                 let port = u16::from_be_bytes([buffer[buffer.len() - 2], buffer.last().copied().unwrap_or(0x00)]);
+                // println!("parse socks5 addr:{},{}",host,port);
                 Ok(AddrInfo { host, port })
             }
 

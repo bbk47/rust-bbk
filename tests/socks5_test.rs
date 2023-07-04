@@ -31,14 +31,15 @@ fn parse_addr_info_ipv6() {
 
 #[test]
 fn parse_addr_info_domain() {
-    let buffer = [3, 11, 101, 120, 97, 109, 112, 108, 101, 46, 99, 111, 109, 0x80, 0x80];
+    let buffer = [0x03,0x0d,0x77,0x77,0x77,0x2e,0x62,0x61,0x69,0x64,0x75,0x2e,0x63,0x6f,0x6d,0x04,0x4b];
     // [101, 120, 97, 109, 112, 108, 101, 46, 99, 111, 109]
     let address = AddrInfo::from_buffer(&buffer).unwrap();
+    println!("address:{},{}",address.host,address.port);
     assert_eq!(
         address,
         AddrInfo {
-            host: "example.com".to_owned(),
-            port: 32896,
+            host: "www.baidu.com".to_owned(),
+            port: 1099,
         }
     );
 }

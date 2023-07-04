@@ -41,7 +41,7 @@ pub fn new_socks5_proxy(mut conn: TcpStream) -> Result<ProxySocket, Box<dyn Erro
             let len = (2 + domain_len) as usize;
             buf[1] = domain_len;
             conn.read_exact(&mut buf[2..len + 2])?;
-            1 + 1 + domain_len as usize + 2 + 1 // atype+domain_len+domain name + port + NAMETYPE
+            1 + 1 + domain_len as usize + 2 // atype+domain_len+domain name + port + NAMETYPE
         }
         _ => return Err("invalid ATYP".into()),
     };

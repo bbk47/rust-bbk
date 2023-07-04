@@ -29,7 +29,7 @@ impl Transport for TcpTransport {
         (&self.conn).read_exact(&mut lenbuf)?;
 
         let length = (lenbuf[0] as usize) << 8 | lenbuf[1] as usize;
-        println!("len:{}", length);
+        // println!("len:{}", length);
         let mut databuf = vec![0u8; length];
         (&self.conn).read_exact(&mut databuf)?;
 

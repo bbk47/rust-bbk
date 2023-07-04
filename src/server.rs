@@ -2,9 +2,8 @@ use std::error::Error;
 use std::fmt::Debug;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
-use std::{thread, io};
 use std::time::Duration;
-
+use std::{io, thread};
 
 use crate::option::BbkSerOption;
 use crate::serve;
@@ -29,12 +28,13 @@ impl BbkServer {
         let serizer = Serializer::new(&opts.method, &opts.password).unwrap();
         BbkServer {
             opts: opts,
-            logger:Arc::new(logger),
+            logger: Arc::new(logger),
             serizer: Arc::new(Box::new(serizer)),
         }
     }
 
-     fn init_server(&self) {
+
+    fn init_server(&self) {
         if self.opts.listen_port <= 1024 && self.opts.listen_port >= 65535 {
             panic!("invalid port: {}", self.opts.listen_port);
         }
@@ -42,7 +42,7 @@ impl BbkServer {
         let addr = format!("{}:{}", &self.opts.listen_addr, &port);
         // let server = serve::new_abc_tcp_server(&self.opts.listen_addr, port).unwrap();
         let server = serve::AbcTcpServer::new(&self.opts.listen_addr, port).unwrap();
-       
+
         // 这里是需要异步执行的代码
         for tunnel in server {
             match tunnel {
@@ -52,56 +52,74 @@ impl BbkServer {
                     println!("new connection coming...");
                     let logger2 = self.logger.clone();
                     let serizer = self.serizer.clone();
-                    thread::spawn( move || {
+                    thread::spawn(move || {
                         println!("connection====");
                         // let tsport = wrap_tunnel(tunconn);
                         let conn = tun.tcp_socket.try_clone().unwrap();
                         println!("tsport:{:?}", &conn);
                         let tcpts = TcpTransport { conn };
                         // let tsport: Arc<Box<dyn Transport + Send + Sync>> = Arc::new(Box::new(tcpts));
-                        let mut server_stub = TunnelStub::new(Box::new(tcpts), serizer);
+                        let server_stub = TunnelStub::new(Box::new(tcpts), serizer);
 
-                        server_stub.start();
+                        let server_stub_arc = Arc::new(server_stub);
+                        let server_stub_arc1 = server_stub_arc.clone();
+                        let server_stub_arc2 = server_stub_arc.clone();
+                        server_stub_arc1.start();
 
                         println!("exec here loop await stream===");
                         loop {
-                            println!("listen stream...");
-                            thread::sleep(Duration::from_millis(1000));
-                            match server_stub.streamch_recv.recv() {
+                            // println!("listen stream...");
+                            match server_stub_arc2.streamch_recv.recv() {
                                 Ok(stream) => {
-                                    println!("stream ===> addr:{:?}", &stream.addr);
+                                    println!("stream ===> addr:{:?}", &stream.addstr);
                                     let addrinfo = AddrInfo::from_buffer(&stream.addr).unwrap();
-                                    let addstr =format!("{}:{}", &addrinfo.host,&addrinfo.port);
-                                    logger2.info(&format!("REQ CONNECT=>{}\n", &addstr));
+                                    logger2.info(&format!("REQ CONNECT=>{}\n", &stream.addstr));
                                     let socketaddr = (addrinfo.host, addrinfo.port).to_socket_addrs();
-                                    if let Ok(mut socketaddr2) = socketaddr{
+                                    if let Ok(mut socketaddr2) = socketaddr {
                                         let socket_addr = socketaddr2.next().unwrap();
-                                        let conn = TcpStream::connect_timeout(&socket_addr, Duration::from_secs(10));
-                                        
-                                        if let Ok(socket) = conn {
-                                            logger2.info(&format!("DIAL SUCCESS==>{}", &addstr));
-                                            server_stub.set_ready(&stream);
-
-                                            let mut socket_writer = socket.try_clone().unwrap();
-                                            let mut socket_reader = socket.try_clone().unwrap();
-                                            
-                                            println!("handle stream  to remote");
-                                            let mut v_stream1= stream.try_clone().unwrap();
-                                            let mut v_stream2 = stream.try_clone().unwrap();
-                                            thread::spawn(move || {
-                                                let _ = io::copy(&mut v_stream1, &mut socket_writer);
-                                                println!("copy virtual stream to remote complete or error...1");
-                                            });
-                                            thread::spawn(move ||{
-                                                let _ = io::copy(&mut socket_reader, &mut v_stream2);
-                                                println!("copy remote to virtual stream complete or error...2");
-                                            });
-                                        }
+                                        let socket_addr2 = socket_addr.clone();
+                                        let stub_clone = server_stub_arc2.clone();
+                                        thread::spawn(move || {
+                                            let socket_addr2 = socket_addr2;
+                                            let conn = TcpStream::connect_timeout(&socket_addr2, Duration::from_secs(10));
+                                            if let Ok(socket) = conn {
+                                                println!("DIAL SUCCESS==>{}", &stream.addstr);
+                                                stub_clone.set_ready(&stream);
+                                                let mut socket_writer = socket.try_clone().unwrap();
+                                                let mut socket_reader = socket.try_clone().unwrap();
+                                    
+                                                println!("handle stream  to remote");
+                                                let mut v_stream1 = stream.try_clone().unwrap();
+                                                let mut v_stream2 = stream.try_clone().unwrap();
+                                                thread::spawn(move || {
+                                                    let ret = io::copy(&mut v_stream1, &mut socket_writer);
+                                                    match ret {
+                                                        Ok(_) => {
+                                                            println!("copy stream to  remote socket complete.");
+                                                            socket.shutdown(std::net::Shutdown::Both).expect("shutdown socket err");
+                                                        }
+                                                        Err(err) => {
+                                                            println!("copy stream to  remote socket error:{:?}", err);
+                                                        }
+                                                    }
+                                                });
+                                                // let stub2 = server_stub_arc2.clone();
+                                                let ret = io::copy(&mut socket_reader, &mut v_stream2);
+                                                match ret {
+                                                    Ok(_) => {
+                                                        println!("copy remote socket to stream complete.");
+                                                        v_stream2.shutdown().expect("shutdown socket err");
+                                                    }
+                                                    Err(err) => {
+                                                        println!("copy remote socket to stream error:{:?}", err);
+                                                    }
+                                                }
+                                            }
+                                        });
                                     }
-                                   
                                 }
                                 Err(err) => {
-                                    eprintln!("err:{:?}",err);
+                                    eprintln!("err:{:?}", err);
                                 }
                             }
                         }
@@ -125,7 +143,7 @@ impl BbkServer {
     //         .map_err(|e| -> Box<dyn Error> { Box::new(e) })
     // }
 
-    pub  fn bootstrap(&self) {
+    pub fn bootstrap(&self) {
         self.init_server()
     }
 }
