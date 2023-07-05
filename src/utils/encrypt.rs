@@ -85,10 +85,11 @@ impl Encryptor {
     }
 }
 
-trait EncryptorImpl {
+trait EncryptorImpl:Send +Sync+ 'static  {
     fn encrypt(&self, data: &mut Vec<u8>) -> Result<(), Box<dyn Error>>;
     fn decrypt(&self, data: &mut Vec<u8>) -> Result<(), Box<dyn Error>>;
 }
+
 
 
 use openssl::hash::{Hasher, MessageDigest};
