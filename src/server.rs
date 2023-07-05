@@ -64,7 +64,6 @@ impl BbkServer {
                         let server_stub_arc = Arc::new(server_stub);
                         let server_stub_arc1 = server_stub_arc.clone();
                         let server_stub_arc2 = server_stub_arc.clone();
-                        server_stub_arc1.start();
 
                         println!("exec here loop await stream===");
                         loop {
@@ -108,7 +107,7 @@ impl BbkServer {
                                                 match ret {
                                                     Ok(_) => {
                                                         println!("copy remote socket to stream complete.");
-                                                        v_stream2.shutdown().expect("shutdown socket err");
+                                                        v_stream2.close_peer();
                                                     }
                                                     Err(err) => {
                                                         println!("copy remote socket to stream error:{:?}", err);

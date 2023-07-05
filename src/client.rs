@@ -143,7 +143,6 @@ impl BbkClient {
             if self.tunnel_status != TUNNEL_OK {
                 match self.setup_ws_connection() {
                     Ok(worker) => {
-                        worker.start();
                         self.tunnel_status = TUNNEL_OK;
                         let worker_arc = Arc::new(worker);
                         let worker_arc2 = worker_arc.clone();
@@ -158,12 +157,13 @@ impl BbkClient {
                         // });
                         thread::spawn(move || loop {
                             // block thread
+                            println!("listen stream accept.");
                             match worker_arc3.accept() {
                                 Ok(stream) => {
-                                    println!("stream ready for===>:{:?}", &stream.addstr);
+                                    println!("1stream ready for===>:{:?}", &stream.addstr);
                                     let cid = stream.cid.clone();
                                     let browser_proxys = proxys.lock().unwrap();
-                                    println!("release lock====");
+                                    println!("1release lock====");
                                     let browserobj_ret = browser_proxys.get(&cid);
                                     if let Some(browser_obj) = browserobj_ret {
                                         // handle brower socket to stream
@@ -177,6 +177,7 @@ impl BbkClient {
                                             match ret {
                                                 Ok(_) => {
                                                     println!("copy browser to  stream complete.");
+                                                    // 
                                                 }
                                                 Err(err) => {
                                                     println!("copy browser to  stream error:{:?}", err);
@@ -189,6 +190,7 @@ impl BbkClient {
                                             match ret {
                                                 Ok(_) => {
                                                     println!("copy stream to browser complete.");
+                                                    v_stream2.close();
                                                     browser_socket2.shutdown(std::net::Shutdown::Write);
                                                 }
                                                 Err(err) => {
@@ -196,7 +198,6 @@ impl BbkClient {
                                                 }
                                             }
                                         });
-                                        break;
                                     }
                                 }
                                 Err(err) => {
@@ -220,16 +221,14 @@ impl BbkClient {
             // block thread
             match self.req_recver.recv() {
                 Ok(mut request) => {
+                    println!("handle request comming");
                     if let Some(stub) = &self.stub_client {
+                        println!("do start stream.....");
                         let cid = stub.start_stream(request.proxy_socket.get_addr());
-                        println!("start stream ...{}", cid);
                         let mut brower_proxys = browser_proxys1.lock().unwrap();
-                        println!("release lock====");
                         request.cid = cid.clone();
                         brower_proxys.insert(cid, Arc::new(request));
                     }
-
-                    // cli.browserProxy[st.cid] = request
                 }
                 Err(err) => {
                     println!("req_recver err:{:?}",err);

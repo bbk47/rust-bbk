@@ -27,9 +27,9 @@ pub struct TunnelStub {
     tsport: Arc<Box<dyn Transport + Send + Sync>>,
     streams: Arc<Mutex<HashMap<String, Arc<VirtualStream>>>>,
     streamch_send: Sender<Arc<VirtualStream>>,
-    sender_send: SyncSender<Frame>,
+    sender_send: Sender<Frame>,
     pub streamch_recv: Receiver<Arc<VirtualStream>>,
-    sender_recv: Arc<Mutex<Receiver<Frame>>>,
+    // sender_recv: Arc<Box<Receiver<Frame>>>,
 }
 
 unsafe impl Send for TunnelStub{}
@@ -50,9 +50,9 @@ unsafe impl Sync for TunnelStub{}
 // }
 
 impl TunnelStub {
-    pub fn new(mut tsport: Box<dyn Transport + Send + Sync>, serizer: Arc<Box<Serializer>>) -> Self {
-        let (streamch_send, mut streamch_recv) = channel();
-        let (sender_send, mut sender_recv) = sync_channel(0);
+    pub fn new( tsport: Box<dyn Transport + Send + Sync>, serizer: Arc<Box<Serializer>>) -> Self {
+        let (streamch_send,  streamch_recv) = channel();
+        let (sender_send,  sender_recv) = channel();
 
         println!("new tunnel stub worker.");
         let stub = TunnelStub {
@@ -60,19 +60,20 @@ impl TunnelStub {
             tsport: Arc::new(tsport),
             streams: Arc::new(Mutex::new(HashMap::new())),
             streamch_send: streamch_send.clone(),
-            sender_send: sender_send.clone(),
             streamch_recv: streamch_recv,
-            sender_recv: Arc::new(Mutex::new(sender_recv)),
+            sender_send: sender_send,
+            // sender_recv: Arc::new(Box::new(sender_recv)),
             // closech_recv: closech_recv,
         };
+        stub.start(sender_recv);
 
         stub
     }
 
-    pub fn start(&self) {
+    pub fn start(&self,recv:Receiver<Frame>) {
         let sender_send_cloned = self.sender_send.clone();
         let streamch_send_cloned = self.streamch_send.clone();
-        let recver = self.sender_recv.clone();
+        // let recver = self.sender_recv.clone();
         println!("start====stub");
         let serizer1: Arc<Box<Serializer>> = self.serizer.clone();
         let serizer2 = self.serizer.clone();
@@ -110,16 +111,21 @@ impl TunnelStub {
                         let addr = frame.data.clone();
                         let sender = sender_send_cloned.clone();
                         let stream = VirtualStream::new(frame.cid.clone(), addr, sender);
-                        let st2 = Arc::new(stream);
+                        let st = Arc::new(stream);
                         let mut steams = streams.lock().unwrap();
-                        steams.insert(frame.cid.clone(), st2.clone());
-                        streamch_send_cloned.send(st2).unwrap();
+                        steams.insert(frame.cid.clone(), st.clone());
+                        streamch_send_cloned.send(st).unwrap();
                     } else if frame.r#type == EST_FRAME {
                         let stream_id = frame.cid.clone();
+                        println!("=====est frame lock start resolve 1");
                         let steams = streams.lock().unwrap();
+                        println!("=====est frame lock resolve ok 2");
                         let value = steams.get(&stream_id);
                         if let Some(st) = value {
-                            streamch_send_cloned.send((*st).clone()).unwrap();
+                            let st2: Arc<VirtualStream> = (*st).clone();
+                            println!("emit stream====={}, {}",&st2.addstr,&st2.cid);
+                            streamch_send_cloned.send(st2).unwrap();
+                            println!("emit stream ok");
                         }
                     } else if frame.r#type == STREAM_FRAME {
                         let stream_id = frame.cid.clone();
@@ -145,10 +151,9 @@ impl TunnelStub {
         });
         thread::spawn(move || {
             println!("write worker started");
-            let mut rec = recver.lock().unwrap();
             'writeloop: loop {
                   // block thread
-                match rec.recv() {
+                match recv.recv() {
                     Ok(ref fm) => {
                         let frames = split_frame(fm);
                         for smallframe in &frames {
@@ -187,12 +192,11 @@ impl TunnelStub {
         let data = &addr[..addrlen];
         let sender = self.sender_send.clone();
         let stream = VirtualStream::new(cid.to_owned(), data.to_vec(), sender);
+        let st = Arc::new(stream);
         let mut steams = self.streams.lock().unwrap();
-        steams.insert(cid.clone(), Arc::new(stream));
+        steams.insert(cid.clone(), st);
         let frame = Frame::new(cid.to_owned(), protocol::INIT_FRAME, data.to_vec());
-        println!("send to transport====>>>>11");
         self.sender_send.send(frame).unwrap();
-        println!("send to transport====>>>>22");
         cid
     }
 
