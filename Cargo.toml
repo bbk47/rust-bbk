@@ -1,5 +1,5 @@
 [package]
-name = "rust-bbk"
+name = "bbk"
 version = "0.1.0"
 edition = "2021"
 
@@ -23,3 +23,7 @@ sha2 = "0.10.6"
 threadpool = "1.8.1"
 uuid = { version = "0.8", features = ["serde", "v4"] }
 websocket = "0.26.5"
+
+[profile.release]
+opt-level = 3
+lto = true

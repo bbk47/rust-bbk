@@ -57,6 +57,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "bbk"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "futures 0.3.28",
+ "hex",
+ "hyper 0.14.26",
+ "md-5",
+ "openssl",
+ "rand 0.8.5",
+ "regex",
+ "retry",
+ "rust-crypto",
+ "serde",
+ "serde_json",
+ "sha2",
+ "threadpool",
+ "uuid",
+ "websocket",
+]
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1150,28 +1172,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9166d72162de3575f950507683fac47e30f6f2c3836b71b7fbc61aa517c9c5f4"
 dependencies = [
  "rand 0.8.5",
-]
-
-[[package]]
-name = "rust-bbk"
-version = "0.1.0"
-dependencies = [
- "clap",
- "futures 0.3.28",
- "hex",
- "hyper 0.14.26",
- "md-5",
- "openssl",
- "rand 0.8.5",
- "regex",
- "retry",
- "rust-crypto",
- "serde",
- "serde_json",
- "sha2",
- "threadpool",
- "uuid",
- "websocket",
 ]
 
 [[package]]
