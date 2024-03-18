@@ -1,7 +1,6 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub mod encrypt;
-pub mod logger;
 pub mod socks5;
 pub mod uuid;
 

@@ -14,7 +14,7 @@ macro_rules! impl_aes_encryptor {
                 let key_len = $cipher.key_len();
                 let iv_len = $cipher.iv_len().unwrap();
                 let (key, iv) = evp_bytes_to_key(&password, key_len, iv_len);
-                println!("key:{},iv:{}", hex::encode(&key), hex::encode(&iv));
+                // println!("key:{},iv:{}", hex::encode(&key), hex::encode(&iv));
                 $name { key, iv }
             }
         }

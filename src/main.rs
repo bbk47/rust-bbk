@@ -1,5 +1,11 @@
 use clap::Parser;
+use colored::*;
 use regex::Regex;
+use std::{fmt::Debug, io::Write};
+
+use env_logger::{Builder, Env};
+use log::{Level, LevelFilter};
+
 use std::{
     fs,
     sync::{Arc, Mutex},
@@ -32,6 +38,21 @@ fn main() {
         println!("config file is missing!");
         return;
     }
+
+    Builder::new()
+        .format(|buf, record| {
+            let timestamp = buf.timestamp();
+            let level = match record.level() {
+                Level::Error => record.level().to_string().red(),
+                Level::Warn => record.level().to_string().yellow(),
+                Level::Info => record.level().to_string().green(),
+                Level::Debug | Level::Trace => record.level().to_string().blue(),
+            };
+            writeln!(buf, "{} [{}] > {}", timestamp, level, record.args())
+        })
+        .filter(None, LevelFilter::Info)
+        .init();
+
     // let s = String::from("hello world");
 
     // let hello = &s[0..5];
@@ -52,12 +73,16 @@ fn main() {
         let bbkopts: option::BbkCliOption = serde_json::from_str(&fscontent).unwrap();
         let jsonstr = serde_json::to_string_pretty(&bbkopts).unwrap();
         println!("bbkopts:\n{}!", jsonstr);
+        // We are reusing `anstyle` but there are `anstyle-*` crates to adapt it to your
+        // preferred styling crate.
+
         let mut cli = client::BbkClient::new(bbkopts);
         cli.bootstrap()
     } else {
         let bbkopts: option::BbkSerOption = serde_json::from_str(&fscontent).unwrap();
         let jsonstr = serde_json::to_string_pretty(&bbkopts).unwrap();
         println!("bbkopts:\n{}!", jsonstr);
+
         let mut svc = server::BbkServer::new(bbkopts);
         svc.bootstrap()
     }

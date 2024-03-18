@@ -4,6 +4,7 @@ use std::error::Error;
 use std::io::{self, BufRead};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
+use log::{debug};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use std::sync::mpsc::{channel, Receiver, RecvError, Sender, SyncSender, sync_channel};
@@ -95,7 +96,7 @@ impl TunnelStub {
                 };
                 // println!("read data==={:?}", packet);
                 if let Ok(frame) = serizer2.deserialize(&packet) {
-                    println!("TunnelStub read frame: {} {} {}", frame.cid, frame.r#type, frame.data.len());
+                    debug!("TunnelStub read frame: {} {} {}", frame.cid, frame.r#type, frame.data.len());
                     if frame.r#type == PING_FRAME {
                         let now = get_timestamp();
                         let mut st = frame.data.clone();
@@ -158,7 +159,7 @@ impl TunnelStub {
                         let frames = split_frame(fm);
                         for smallframe in &frames {
                             let binary_data = serizer1.serialize(&smallframe);
-                            println!("TunnelStub send frame: {} {} {}", smallframe.cid, smallframe.r#type, smallframe.data.len());
+                            debug!("TunnelStub write frame: {} {} {}", smallframe.cid, smallframe.r#type, smallframe.data.len());
                             // println!("writeing packet ==={:?}",binary_data);
                             if let Err(er) = tsport2.send_packet(&binary_data) {
                                 eprintln!("Failed to send frame: {:?}", er);
