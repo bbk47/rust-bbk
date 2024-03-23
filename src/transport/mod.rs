@@ -27,9 +27,9 @@ use self::tcp::new_tcp_transport;
 //     }
 // }
 
-pub fn create_transport(tunOpts: &TunnelOpts) -> Result<Box<dyn Transport + Send + Sync>, Box<dyn Error>> {
-    let tunport:u16= tunOpts.port.parse()?;
-    let tsport=new_tcp_transport(&tunOpts.host,tunport)?;
+pub fn create_transport(tun_opts: &TunnelOpts) -> Result<Box<dyn Transport + Send + Sync>, Box<dyn Error>> {
+    let tunport:u16= tun_opts.port.parse()?;
+    let tsport=new_tcp_transport(&tun_opts.host,tunport)?;
 
     Ok(Box::new(tsport))
 }

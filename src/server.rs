@@ -30,7 +30,7 @@ impl BbkServer {
     }
 
     fn handle_stream(&self, stream: Arc<VirtualStream>, stub: Arc<TunnelStub>) {
-        info!("stream ===> addr:{:?}", &stream.addstr);
+        info!("stream ===> addr:{}", &stream.addstr);
         let addrinfo = AddrInfo::from_buffer(&stream.addr).unwrap();
         info!("REQ CONNECT=>{}", &stream.addstr);
         let socketaddr = (addrinfo.host, addrinfo.port).to_socket_addrs();

@@ -7,21 +7,31 @@ use std::{
 };
 
 use log::{error, info};
+use regex::bytes;
 
 use crate::stub::VirtualStream;
 
+pub mod emiter;
 pub mod encrypt;
 pub mod socks5;
 pub mod uuid;
 
-pub fn get_timestamp() -> String {
-    let now = SystemTime::now();
-    let duration = now.duration_since(UNIX_EPOCH).expect("Clock may have gone backwards");
-    let millis = duration.as_millis() as i64;
-    format!("{}", millis)
+
+pub fn get_timestamp() -> i64 {
+    let current_time = SystemTime::now().duration_since(UNIX_EPOCH).expect("Failed to get current time");
+    let timestamp = current_time.as_secs() as i64 * 1000 + current_time.subsec_nanos() as i64 / 1_000_000;
+    timestamp
 }
 
-pub fn forward( tcpstream: TcpStream, vstream: Arc<VirtualStream>) {
+
+pub fn get_timestamp_bytes() -> Vec<u8> {
+    let current_time = SystemTime::now().duration_since(UNIX_EPOCH).expect("Failed to get current time");
+    let timestamp = current_time.as_secs() as i64 * 1000 + current_time.subsec_nanos() as i64 / 1_000_000;
+    
+    timestamp.to_string().as_bytes().to_vec()
+}
+
+pub fn forward(tcpstream: TcpStream, vstream: Arc<VirtualStream>) {
     let mut browser_socket1 = tcpstream.try_clone().unwrap();
     let mut browser_socket2 = tcpstream.try_clone().unwrap();
     let mut v_stream1 = vstream.try_clone().unwrap();
@@ -32,7 +42,7 @@ pub fn forward( tcpstream: TcpStream, vstream: Arc<VirtualStream>) {
         match ret {
             Ok(_) => {}
             Err(err) => {
-                error!("forward err:{:?}",err.to_string());
+                error!("forward err:{:?}", err.to_string());
             }
         }
     });
@@ -45,7 +55,7 @@ pub fn forward( tcpstream: TcpStream, vstream: Arc<VirtualStream>) {
                 browser_socket2.shutdown(std::net::Shutdown::Write);
             }
             Err(err) => {
-                error!("forward err:{:?}",err.to_string());
+                error!("forward err:{:?}", err.to_string());
             }
         }
     });

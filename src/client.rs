@@ -13,11 +13,11 @@ use std::{io, println, thread};
 
 use crate::serializer::Serializer;
 use crate::stub::{TunnelStub, VirtualStream};
-use crate::utils::forward;
+use crate::utils::{forward, get_timestamp};
 use crate::{proxy, stub, utils};
 
 use crate::option::{BbkCliOption, TunnelOpts};
-use crate::proxy::ProxySocket;
+use crate::proxy::{ProxyServer, ProxySocket};
 use crate::transport::{self, create_transport, Transport};
 
 const TUNNEL_INIT: u8 = 0x1;
@@ -27,7 +27,6 @@ const TUNNEL_DISCONNECT: u8 = 0x3;
 struct BrowserObj {
     cid: String,
     proxy_socket: ProxySocket,
-    // stream_ch: mpsc::Sender<stub::Stream>,
 }
 
 pub struct BbkClient {
@@ -81,26 +80,32 @@ impl BbkClient {
         }
         Ok(result.unwrap())
     }
-    pub fn listen_stream(&mut self, worker: TunnelStub) {
+    fn listen_stream(&mut self, worker: TunnelStub) {
         let worker_arc = Arc::new(worker);
+        let worker_arc1 = worker_arc.clone();
+        let worker_arc2 = worker_arc.clone();
         let worker_arc3 = worker_arc.clone();
         // let proxys = self.browser_proxys.clone();
         self.stub_client = Some(worker_arc);
         info!("tunnel setup success.");
-        // thread::spawn(move || loop {
-        //     // block thread
-        //     thread::sleep(Duration::from_millis(3000));
-        //     worker_arc2.ping();
-        // });
+        let emiter = worker_arc1.emiter.clone();
+        emiter.lock().unwrap().subscribe("pong",Box::new(|message|{
+            let now = get_timestamp();
+            info!("tunnel health up:{}ms,down:{}ms,rtt:{}ms",message.atime-message.stime,now-message.atime, now-message.stime);
+        }));
+        thread::spawn(move || loop {
+            // block thread
+            thread::sleep(Duration::from_millis(3000));
+            worker_arc2.ping();
+        });
         let bproxys = self.browser_proxys.clone();
         thread::spawn(move || loop {
             // block thread
-            info!("listen stream accept.");
             match worker_arc3.accept() {
                 Ok(stream) => {
-                    info!("request ===>:{:?}", &stream.addstr);
+                    info!("2. EST ===>:{}", &stream.addstr);
                     let cid = stream.cid.clone();
-                    let browser_proxys =  bproxys.lock().unwrap();
+                    let browser_proxys = bproxys.lock().unwrap();
                     let browserobj_ret = browser_proxys.get(&cid);
                     if let Some(browser_obj) = browserobj_ret {
                         // handle brower socket to stream
@@ -114,26 +119,34 @@ impl BbkClient {
             }
         });
     }
-    pub fn handle_request(&mut self, rx: &Receiver<BrowserObj>) {
+    fn handle_request(&mut self, rx: &Receiver<BrowserObj>) {
         let browser_proxys1 = self.browser_proxys.clone();
         let stubcli = self.stub_client.clone();
         // block thread
         match rx.recv() {
             Ok(mut request) => {
-                info!("handle request comming");
-                if let Some(stub) = &stubcli {
-                    let cid = stub.start_stream(request.proxy_socket.get_addr());
-                    let mut brower_proxys = browser_proxys1.lock().unwrap();
-                    request.cid = cid.clone();
-                    brower_proxys.insert(cid, Arc::new(request));
+                let addr = request.proxy_socket.get_addr();
+                // println!("addr:{:?}", addr.to_vec());
+                let ret: Result<utils::socks5::AddrInfo, Box<dyn Error>> = utils::socks5::AddrInfo::from_buffer(addr);
+                if let Ok(addrinfo) = ret {
+                    info!("1.CMD {}:{}",addrinfo.host,addrinfo.port);
+                    if let Some(stub) = &stubcli {
+                        let cid = stub.start_stream(request.proxy_socket.get_addr());
+                        let mut brower_proxys = browser_proxys1.lock().unwrap();
+                        request.cid = cid.clone();
+                        brower_proxys.insert(cid, Arc::new(request));
+                    }
+                } else {
+                    error!("=====exception addr socks5...");
                 }
+              
             }
             Err(err) => {
                 println!("req_recver err:{:?}", err);
             }
         }
     }
-    pub fn service_worker(&mut self, rx: Receiver<BrowserObj>) {
+    fn service_worker(&mut self, rx: Receiver<BrowserObj>) {
         // main loop check tunnel and reconnecting
         loop {
             info!("server worker start, tunnel status:{}", self.tunnel_status);
@@ -156,42 +169,51 @@ impl BbkClient {
         }
     }
 
-    pub fn init_proxy_server(&mut self, tx: Sender<BrowserObj>) {
+    fn get_tcp_server(&self,port:i64)->ProxyServer{
         let opts = self.opts.clone();
-
+        if port <= 1024 && port >= 65535 {
+            panic!("invalid port: {}", port);
+        }
+        let port2 = port as u16;
+        let proxy_server = proxy::new_proxy_server(&opts.listen_addr, port2).unwrap();
+        info!("Proxy server listening on {}", proxy_server.get_addr());
+        return proxy_server;
+    }
+    fn init_socks5_server(&mut self, tx: Arc<Sender<BrowserObj>>) {
+        let server = self.get_tcp_server(self.opts.listen_port);
         thread::spawn(move || {
-            println!("exec here...");
-            if opts.listen_port <= 1024 && opts.listen_port >= 65535 {
-                panic!("invalid port: {}", opts.listen_port);
-            }
-            if opts.listen_http_port <= 1024 && opts.listen_http_port >= 65535 {
-                panic!("invalid port: {}", opts.listen_http_port);
-            }
-            let port = opts.listen_port as u16;
-
-            let proxy_server = proxy::new_proxy_server(&opts.listen_addr, port).unwrap();
-            info!("Proxy server listening on {}", proxy_server.get_addr());
-
-            proxy_server.listen_conn(|tcpstream| {
+            server.listen_conn(|tcpstream| {
                 // Handle incoming connections here
                 match proxy::socks5::new_socks5_proxy(tcpstream) {
                     Ok(proxy) => {
-                        let addr = proxy.get_addr();
-                        // println!("addr:{:?}", addr.to_vec());
-                        let ret: Result<utils::socks5::AddrInfo, Box<dyn Error>> = utils::socks5::AddrInfo::from_buffer(addr);
-                        if let Ok(addrinfo) = ret {
-                            info!("=====await socks5...{}:{}", addrinfo.host, addrinfo.port);
-                            let reqobj = BrowserObj {
-                                cid: "00000".to_owned(),
-                                proxy_socket: proxy,
-                            };
-                            tx.send(reqobj).expect("dispatch proxy socket error");
-                        } else {
-                            error!("=====exception addr socks5...");
-                        }
+                        let reqobj = BrowserObj {
+                            cid: "00000".to_owned(),
+                            proxy_socket: proxy,
+                        };
+                        tx.send(reqobj).expect("dispatch proxy socket error");
                     }
                     Err(e) => {
-                        error!("socks5 proxy err:{}", e);
+                        error!("new socks5 proxy err:{}", e);
+                    }
+                };
+            });
+        });
+    }
+    fn init_connect_server(&mut self, tx: Arc<Sender<BrowserObj>>) {
+        let server = self.get_tcp_server(self.opts.listen_http_port);
+        thread::spawn(move || {
+            server.listen_conn(|tcpstream| {
+                // Handle incoming connections here
+                match proxy::connect::new_connect_proxy(tcpstream) {
+                    Ok(proxy) => {
+                        let reqobj = BrowserObj {
+                            cid: "00000".to_owned(),
+                            proxy_socket: proxy,
+                        };
+                        tx.send(reqobj).expect("dispatch proxy socket error");
+                    }
+                    Err(e) => {
+                        error!("new connect proxy err:{}", e);
                     }
                 };
             });
@@ -200,30 +222,9 @@ impl BbkClient {
 
     pub fn bootstrap(&mut self) {
         let (tx, rx) = mpsc::channel();
-        self.init_proxy_server(tx);
+        let tx_arc = Arc::new(tx);
+        self.init_socks5_server(tx_arc.clone());
+        self.init_connect_server(tx_arc.clone());
         self.service_worker(rx);
-
-        // let httpport = self.opts.listen_http_port as u16;
-
-        // let proxy_server2 = proxy::new_proxy_server(&self.opts.listen_addr, httpport).unwrap();
-        // println!("Proxy server listening on {}", proxy_server2.get_addr());
-
-        // proxy_server2.listen_conn(|stream| {
-        //     // Handle incoming connections here
-        //     match proxy::connect::new_connect_proxy(stream) {
-        //         Ok(proxy) => {
-        //             let addr = proxy.get_addr();
-        //             let ret: Result<utils::socks5::AddrInfo, Box<dyn Error>> = utils::socks5::AddrInfo::from_buffer(addr);
-        //             if let Ok(addrinfo) = ret {
-        //                 println!("=====await connect...{}:{}", addrinfo.address, addrinfo.port)
-        //             } else {
-        //                 println!("=====exception addr connect...");
-        //             }
-        //         }
-        //         Err(e) => {
-        //             println!("connect proxy err:{}", e);
-        //         }
-        //     };
-        // });
     }
 }

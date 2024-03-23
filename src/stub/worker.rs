@@ -1,15 +1,17 @@
+use log::debug;
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::{self, BufRead};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
-use log::{debug};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use std::sync::mpsc::{channel, Receiver, RecvError, Sender, SyncSender, sync_channel};
+use std::sync::mpsc::{channel, sync_channel, Receiver, RecvError, Sender, SyncSender};
 
-use crate::utils::{get_timestamp, uuid};
+use crate::utils::emiter::EventManager;
+use crate::utils::{get_timestamp_bytes, uuid};
 
 use super::VirtualStream;
 use crate::protocol::{self, split_frame};
@@ -17,10 +19,9 @@ use crate::protocol::{Frame, EST_FRAME, FIN_FRAME, INIT_FRAME, PING_FRAME, PONG_
 use crate::serializer::Serializer;
 use crate::transport::Transport;
 
-pub fn serialze_frame(serizer: Arc<Box<Serializer>>, frame: &Frame) -> Vec<u8> {
-    serizer.serialize(&frame)
-    //  println!("TunnelStub send frame: {} {} {}", smallframe.cid, smallframe.r#type, smallframe.data.len());
-    // println!("writeing packet ==={:?}",binary_data);
+pub struct  PongMessage{
+    pub stime:i64,
+    pub atime:i64
 }
 
 pub struct TunnelStub {
@@ -29,31 +30,18 @@ pub struct TunnelStub {
     streams: Arc<Mutex<HashMap<String, Arc<VirtualStream>>>>,
     streamch_send: Sender<Arc<VirtualStream>>,
     sender_send: Sender<Frame>,
+    pub emiter: Arc<Mutex<EventManager<PongMessage>>>,
     pub streamch_recv: Receiver<Arc<VirtualStream>>,
     // sender_recv: Arc<Box<Receiver<Frame>>>,
 }
 
-unsafe impl Send for TunnelStub{}
-unsafe impl Sync for TunnelStub{}
-
-// impl DerefMut for TunnelStub {
-//     fn deref_mut(&mut self) -> &mut Self::Target {
-//         self
-//     }
-// }
-
-// impl Deref for TunnelStub {
-//     type Target = Vec<u8>;
-
-//     fn deref(&self) -> &Self::Target {
-//         &self.tunnels
-//     }
-// }
+unsafe impl Send for TunnelStub {}
+unsafe impl Sync for TunnelStub {}
 
 impl TunnelStub {
-    pub fn new( tsport: Box<dyn Transport + Send + Sync>, serizer: Arc<Box<Serializer>>) -> Self {
-        let (streamch_send,  streamch_recv) = channel();
-        let (sender_send,  sender_recv) = channel();
+    pub fn new(tsport: Box<dyn Transport + Send + Sync>, serizer: Arc<Box<Serializer>>) -> Self {
+        let (streamch_send, streamch_recv) = channel();
+        let (sender_send, sender_recv) = channel();
 
         // println!("new tunnel stub worker.");
         let stub = TunnelStub {
@@ -63,6 +51,7 @@ impl TunnelStub {
             streamch_send: streamch_send.clone(),
             streamch_recv: streamch_recv,
             sender_send: sender_send,
+            emiter:Arc::new(Mutex::new(EventManager::new())),
             // sender_recv: Arc::new(Box::new(sender_recv)),
             // closech_recv: closech_recv,
         };
@@ -71,7 +60,7 @@ impl TunnelStub {
         stub
     }
 
-    pub fn start(&self,recv:Receiver<Frame>) {
+    pub fn start(&self, recv: Receiver<Frame>) {
         let sender_send_cloned = self.sender_send.clone();
         let streamch_send_cloned = self.streamch_send.clone();
         // let recver = self.sender_recv.clone();
@@ -81,12 +70,14 @@ impl TunnelStub {
         let tsport1 = self.tsport.clone();
         let tsport2 = self.tsport.clone();
         let streams = self.streams.clone();
+        let emiter2 = self.emiter.clone();
+     
         // read worker
         thread::spawn(move || {
             println!("read worker started");
             'read_loop: loop {
                 // println!("reading packet...");
-                  // block thread
+                // block thread
                 let packet = match tsport1.read_packet() {
                     Ok(packet) => packet,
                     Err(err) => {
@@ -98,16 +89,22 @@ impl TunnelStub {
                 if let Ok(frame) = serizer2.deserialize(&packet) {
                     debug!("TunnelStub read frame: {} {} {}", frame.cid, frame.r#type, frame.data.len());
                     if frame.r#type == PING_FRAME {
-                        let now = get_timestamp();
                         let mut st = frame.data.clone();
-                        st.extend_from_slice(now.as_bytes());
+                        let data2= get_timestamp_bytes();
+                        st.extend_from_slice(&data2);
                         let cid = String::from("00000000000000000000000000000000");
                         let pong_fm = Frame::new(cid, protocol::PONG_FRAME, st);
                         if let Err(err) = sender_send_cloned.send(pong_fm) {
                             eprintln!("err:{:?}", err);
                         }
                     } else if frame.r#type == PONG_FRAME {
-                        println!("pong here")
+                        // 当需要通知外部时，调用回调函数并传递数据
+                        let datas = frame.data.as_slice();
+                        let stime =  std::str::from_utf8(&datas[..13]).unwrap();
+                        let atime =  std::str::from_utf8(&datas[13..]).unwrap();
+                        let message = PongMessage{stime:stime.parse().unwrap(),atime:atime.parse().unwrap()};
+                        emiter2.lock().unwrap().publish("pong", &message);
+   
                     } else if frame.r#type == INIT_FRAME {
                         let addr = frame.data.clone();
                         let sender = sender_send_cloned.clone();
@@ -153,7 +150,7 @@ impl TunnelStub {
         thread::spawn(move || {
             println!("write worker started");
             'writeloop: loop {
-                  // block thread
+                // block thread
                 match recv.recv() {
                     Ok(ref fm) => {
                         let frames = split_frame(fm);
@@ -207,7 +204,6 @@ impl TunnelStub {
     //         eprintln!("err:{:?}", err);
     //     }
     // }
-
     pub fn set_ready(&self, stream: &VirtualStream) {
         let data = stream.addr.clone();
         let frame = Frame::new(stream.cid.clone(), protocol::EST_FRAME, data);
@@ -215,9 +211,7 @@ impl TunnelStub {
     }
 
     pub fn ping(&self) {
-        let cid = String::from("00000000000000000000000000000000");
-        let now = get_timestamp();
-        let data = now.as_bytes().to_vec();
+        let data = get_timestamp_bytes();
         let cid = String::from("00000000000000000000000000000000");
         let frame = Frame::new(cid, protocol::PING_FRAME, data);
         self.sender_send.send(frame).unwrap();

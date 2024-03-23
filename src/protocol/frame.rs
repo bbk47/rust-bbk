@@ -25,8 +25,6 @@ pub struct Frame {
     pub cid: String,
     pub r#type: u8,
     pub data: Vec<u8>,
-    pub stime: Option<i32>,
-    pub atime: Option<i32>,
 }
 
 impl Frame {
@@ -37,8 +35,6 @@ impl Frame {
             cid,
             r#type,
             data,
-            stime: None,
-            atime: None,
         }
     }
 }
@@ -109,18 +105,7 @@ pub fn decode(binary_data: &[u8]) -> Result<Frame, String> {
     let data = binary_data[data_start..data_start + data_len].to_vec();
 
     // create a new frame with the extracted information
-    let mut frame = Frame::new(cid_buf, r#type, data);
-
-    // update the stime and atime fields based on the type of frame
-    if r#type == PING_FRAME {
-        let stime_str = String::from_utf8_lossy(&frame.data[..13]).to_string();
-        frame.stime = stime_str.parse().ok();
-    } else if r#type == PONG_FRAME {
-        let stime_str = String::from_utf8_lossy(&frame.data[..13]).to_string();
-        frame.stime = stime_str.parse().ok();
-        let atime_str = String::from_utf8_lossy(&frame.data[13..26]).to_string();
-        frame.atime = atime_str.parse().ok();
-    }
+    let frame = Frame::new(cid_buf, r#type, data);
 
     Ok(frame)
 }

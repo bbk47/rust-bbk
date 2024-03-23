@@ -48,7 +48,7 @@ fn main() {
                 Level::Info => record.level().to_string().green(),
                 Level::Debug | Level::Trace => record.level().to_string().blue(),
             };
-            writeln!(buf, "{} [{}] > {}", timestamp, level, record.args())
+            writeln!(buf, "{} {} > {}", timestamp, level, record.args())
         })
         .filter(None, LevelFilter::Info)
         .init();
