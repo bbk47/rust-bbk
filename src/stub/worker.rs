@@ -4,6 +4,7 @@ use std::error::Error;
 use std::io::{self, BufRead};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
+use log::{debug};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use std::sync::mpsc::{channel, Receiver, RecvError, Sender, SyncSender, sync_channel};
@@ -54,7 +55,7 @@ impl TunnelStub {
         let (streamch_send,  streamch_recv) = channel();
         let (sender_send,  sender_recv) = channel();
 
-        println!("new tunnel stub worker.");
+        // println!("new tunnel stub worker.");
         let stub = TunnelStub {
             serizer,
             tsport: Arc::new(tsport),
@@ -74,7 +75,7 @@ impl TunnelStub {
         let sender_send_cloned = self.sender_send.clone();
         let streamch_send_cloned = self.streamch_send.clone();
         // let recver = self.sender_recv.clone();
-        println!("start====stub");
+        // println!("start====stub");
         let serizer1: Arc<Box<Serializer>> = self.serizer.clone();
         let serizer2 = self.serizer.clone();
         let tsport1 = self.tsport.clone();
@@ -95,7 +96,7 @@ impl TunnelStub {
                 };
                 // println!("read data==={:?}", packet);
                 if let Ok(frame) = serizer2.deserialize(&packet) {
-                    println!("TunnelStub read frame: {} {} {}", frame.cid, frame.r#type, frame.data.len());
+                    debug!("TunnelStub read frame: {} {} {}", frame.cid, frame.r#type, frame.data.len());
                     if frame.r#type == PING_FRAME {
                         let now = get_timestamp();
                         let mut st = frame.data.clone();
@@ -117,15 +118,15 @@ impl TunnelStub {
                         streamch_send_cloned.send(st).unwrap();
                     } else if frame.r#type == EST_FRAME {
                         let stream_id = frame.cid.clone();
-                        println!("=====est frame lock start resolve 1");
+                        // println!("=====est frame lock start resolve 1");
                         let steams = streams.lock().unwrap();
-                        println!("=====est frame lock resolve ok 2");
+                        // println!("=====est frame lock resolve ok 2");
                         let value = steams.get(&stream_id);
                         if let Some(st) = value {
                             let st2: Arc<VirtualStream> = (*st).clone();
-                            println!("emit stream====={}, {}",&st2.addstr,&st2.cid);
+                            // println!("emit stream====={}, {}",&st2.addstr,&st2.cid);
                             streamch_send_cloned.send(st2).unwrap();
-                            println!("emit stream ok");
+                            // println!("emit stream ok");
                         }
                     } else if frame.r#type == STREAM_FRAME {
                         let stream_id = frame.cid.clone();
@@ -158,7 +159,7 @@ impl TunnelStub {
                         let frames = split_frame(fm);
                         for smallframe in &frames {
                             let binary_data = serizer1.serialize(&smallframe);
-                            println!("TunnelStub send frame: {} {} {}", smallframe.cid, smallframe.r#type, smallframe.data.len());
+                            debug!("TunnelStub write frame: {} {} {}", smallframe.cid, smallframe.r#type, smallframe.data.len());
                             // println!("writeing packet ==={:?}",binary_data);
                             if let Err(er) = tsport2.send_packet(&binary_data) {
                                 eprintln!("Failed to send frame: {:?}", er);
@@ -174,7 +175,7 @@ impl TunnelStub {
             }
             println!("write worker stoped");
         });
-        println!("start complete.");
+        // println!("start complete.");
     }
     // fn send_frame(mut tsport: Arc<Box<dyn Transport + Send + Sync>>, serizer: Arc<Box<Serializer>>,frame: &Frame) -> io::Result<()> {
     //     let frames = split_frame(frame);

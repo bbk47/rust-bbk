@@ -1,20 +1,24 @@
 use futures::FutureExt;
+use log::{error, info, trace, warn};
 use retry::delay::jitter;
 use retry::{delay::Exponential, retry};
 use std::collections::HashMap;
 use std::error::Error;
+use std::net::TcpStream;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::thread::sleep;
 use std::time::Duration;
 use std::{io, println, thread};
 
 use crate::serializer::Serializer;
+use crate::stub::{TunnelStub, VirtualStream};
+use crate::utils::forward;
 use crate::{proxy, stub, utils};
 
 use crate::option::{BbkCliOption, TunnelOpts};
 use crate::proxy::ProxySocket;
 use crate::transport::{self, create_transport, Transport};
-use crate::utils::logger::{LogLevel, Logger};
 
 const TUNNEL_INIT: u8 = 0x1;
 const TUNNEL_OK: u8 = 0x2;
@@ -28,13 +32,10 @@ struct BrowserObj {
 
 pub struct BbkClient {
     opts: BbkCliOption,
-    logger: Logger,
     browser_proxys: Arc<Mutex<HashMap<String, Arc<BrowserObj>>>>,
     tunnel_opts: TunnelOpts,
-    req_recver: Receiver<BrowserObj>,
-    req_sender: Sender<BrowserObj>,
-    ping_sender: Sender<bool>,
-    ping_recver: Receiver<bool>,
+    // ping_sender: Sender<bool>,
+    // ping_recver: Receiver<bool>,
     // retry_count: u8,
     serizer: Arc<Box<Serializer>>,
     tunnel_status: u8,
@@ -48,28 +49,23 @@ impl BbkClient {
         println!("client new====");
         // let (tx, mut rx) = mpsc::channel(10); // 使用tokio的mpsc
         // let mut proxy_server_tx = tx.clone();
-        let logger = Logger::new(LogLevel::Info);
         let tunopts = opts.tunnel_opts.clone().unwrap();
         let serizer = Serializer::new(&tunopts.method, &tunopts.password).unwrap();
-        let (tx, rx) = mpsc::channel(); // 使用tokio的mpsc替代crossbeam_channel
-        let (ping_tx, ping_rx) = mpsc::channel();
+
         BbkClient {
             tunnel_opts: tunopts,
             opts: opts,
             browser_proxys: Arc::new(Mutex::new(HashMap::new())),
-            req_recver: rx,
-            req_sender: tx,
-            ping_sender: ping_tx,
-            ping_recver: ping_rx,
+            // ping_sender: ping_tx,
+            // ping_recver: ping_rx,
             serizer: Arc::new(Box::new(serizer)),
-            logger: logger,
             stub_client: None,
             tunnel_status: TUNNEL_INIT,
         }
     }
     fn setup_ws_connection(&mut self) -> Result<stub::TunnelStub, Box<dyn Error>> {
         let tun_opts = self.tunnel_opts.clone();
-        self.logger.info(&format!("creating {} tunnel", tun_opts.protocol));
+        info!("creating {} tunnel", tun_opts.protocol);
         let result: Result<stub::TunnelStub, retry::Error<_>> = retry(Exponential::from_millis(10).map(jitter).take(3), || match create_transport(&tun_opts) {
             Ok(tsport) => {
                 let stub: stub::TunnelStub = stub::TunnelStub::new(tsport, self.serizer.clone());
@@ -85,17 +81,83 @@ impl BbkClient {
         }
         Ok(result.unwrap())
     }
-
-    pub fn service_worker(&self) {
-        // let client2 = client.clone();
-        // let inc2 = client.clone();
+    pub fn listen_stream(&mut self, worker: TunnelStub) {
+        let worker_arc = Arc::new(worker);
+        let worker_arc3 = worker_arc.clone();
+        // let proxys = self.browser_proxys.clone();
+        self.stub_client = Some(worker_arc);
+        info!("tunnel setup success.");
+        // thread::spawn(move || loop {
+        //     // block thread
+        //     thread::sleep(Duration::from_millis(3000));
+        //     worker_arc2.ping();
+        // });
+        let bproxys = self.browser_proxys.clone();
+        thread::spawn(move || loop {
+            // block thread
+            info!("listen stream accept.");
+            match worker_arc3.accept() {
+                Ok(stream) => {
+                    info!("request ===>:{:?}", &stream.addstr);
+                    let cid = stream.cid.clone();
+                    let browser_proxys =  bproxys.lock().unwrap();
+                    let browserobj_ret = browser_proxys.get(&cid);
+                    if let Some(browser_obj) = browserobj_ret {
+                        // handle brower socket to stream
+                        let browser_socket1 = browser_obj.proxy_socket.conn.try_clone().unwrap();
+                        forward(browser_socket1, stream)
+                    }
+                }
+                Err(err) => {
+                    error!("err:{:?}", err);
+                }
+            }
+        });
     }
-    pub fn bootstrap(&mut self) {
-        let opts = self.opts.clone();
-        let tunopts = self.tunnel_opts.clone();
+    pub fn handle_request(&mut self, rx: &Receiver<BrowserObj>) {
         let browser_proxys1 = self.browser_proxys.clone();
+        let stubcli = self.stub_client.clone();
+        // block thread
+        match rx.recv() {
+            Ok(mut request) => {
+                info!("handle request comming");
+                if let Some(stub) = &stubcli {
+                    let cid = stub.start_stream(request.proxy_socket.get_addr());
+                    let mut brower_proxys = browser_proxys1.lock().unwrap();
+                    request.cid = cid.clone();
+                    brower_proxys.insert(cid, Arc::new(request));
+                }
+            }
+            Err(err) => {
+                println!("req_recver err:{:?}", err);
+            }
+        }
+    }
+    pub fn service_worker(&mut self, rx: Receiver<BrowserObj>) {
+        // main loop check tunnel and reconnecting
+        loop {
+            info!("server worker start, tunnel status:{}", self.tunnel_status);
+            if self.tunnel_status != TUNNEL_OK {
+                match self.setup_ws_connection() {
+                    Ok(worker) => {
+                        self.tunnel_status = TUNNEL_OK;
+                        self.listen_stream(worker);
+                        info!("setup ws worker ok");
+                    }
+                    Err(er) => {
+                        error!("Failed to setup ws connection: {:?}", er);
+                        self.tunnel_status = TUNNEL_DISCONNECT;
+                        sleep(Duration::from_millis(1000 * 3)); // retry it
+                        continue;
+                    }
+                }
+            }
+            self.handle_request(&rx);
+        }
+    }
 
-        let reqsender1 = self.req_sender.clone();
+    pub fn init_proxy_server(&mut self, tx: Sender<BrowserObj>) {
+        let opts = self.opts.clone();
 
         thread::spawn(move || {
             println!("exec here...");
@@ -108,7 +170,7 @@ impl BbkClient {
             let port = opts.listen_port as u16;
 
             let proxy_server = proxy::new_proxy_server(&opts.listen_addr, port).unwrap();
-            println!("Proxy server listening on {}", proxy_server.get_addr());
+            info!("Proxy server listening on {}", proxy_server.get_addr());
 
             proxy_server.listen_conn(|tcpstream| {
                 // Handle incoming connections here
@@ -118,123 +180,29 @@ impl BbkClient {
                         // println!("addr:{:?}", addr.to_vec());
                         let ret: Result<utils::socks5::AddrInfo, Box<dyn Error>> = utils::socks5::AddrInfo::from_buffer(addr);
                         if let Ok(addrinfo) = ret {
-                            println!("=====await socks5...{}:{}", addrinfo.host, addrinfo.port);
+                            info!("=====await socks5...{}:{}", addrinfo.host, addrinfo.port);
                             let reqobj = BrowserObj {
                                 cid: "00000".to_owned(),
                                 proxy_socket: proxy,
                             };
-                            reqsender1.send(reqobj).expect("dispatch proxy socket error");
-                            println!("====success===")
+                            tx.send(reqobj).expect("dispatch proxy socket error");
                         } else {
-                            println!("=====exception addr socks5...");
+                            error!("=====exception addr socks5...");
                         }
                     }
                     Err(e) => {
-                        println!("socks5 proxy err:{}", e);
+                        error!("socks5 proxy err:{}", e);
                     }
                 };
             });
         });
+    }
 
-        // main loop check tunnel and reconnecting
-        loop {
-            println!("server worker start, tunnel status:{}", self.tunnel_status);
+    pub fn bootstrap(&mut self) {
+        let (tx, rx) = mpsc::channel();
+        self.init_proxy_server(tx);
+        self.service_worker(rx);
 
-            if self.tunnel_status != TUNNEL_OK {
-                match self.setup_ws_connection() {
-                    Ok(worker) => {
-                        self.tunnel_status = TUNNEL_OK;
-                        let worker_arc = Arc::new(worker);
-                        let worker_arc2 = worker_arc.clone();
-                        let worker_arc3 = worker_arc.clone();
-                        let proxys = self.browser_proxys.clone();
-                        self.stub_client = Some(worker_arc);
-                        println!("tunnel setup success.");
-                        // thread::spawn(move || loop {
-                        //     // block thread
-                        //     thread::sleep(Duration::from_millis(3000));
-                        //     worker_arc2.ping();
-                        // });
-                        thread::spawn(move || loop {
-                            // block thread
-                            println!("listen stream accept.");
-                            match worker_arc3.accept() {
-                                Ok(stream) => {
-                                    println!("1stream ready for===>:{:?}", &stream.addstr);
-                                    let cid = stream.cid.clone();
-                                    let browser_proxys = proxys.lock().unwrap();
-                                    println!("1release lock====");
-                                    let browserobj_ret = browser_proxys.get(&cid);
-                                    if let Some(browser_obj) = browserobj_ret {
-                                        // handle brower socket to stream
-                                        let mut browser_socket1 = browser_obj.proxy_socket.conn.try_clone().unwrap();
-                                        let mut browser_socket2 = browser_socket1.try_clone().unwrap();
-                                        let mut v_stream1 = stream.try_clone().unwrap();
-                                        let mut v_stream2 = stream.try_clone().unwrap();
-                                        thread::spawn(move || {
-                                            println!("copy browser to stream====1");
-                                            let ret = io::copy(&mut browser_socket1, &mut v_stream1);
-                                            match ret {
-                                                Ok(_) => {
-                                                    println!("copy browser to  stream complete.");
-                                                    // 
-                                                }
-                                                Err(err) => {
-                                                    println!("copy browser to  stream error:{:?}", err);
-                                                }
-                                            }
-                                        });
-                                        thread::spawn(move || {
-                                            println!("copy stream to browser====2");
-                                            let ret = io::copy(&mut v_stream2, &mut browser_socket2);
-                                            match ret {
-                                                Ok(_) => {
-                                                    println!("copy stream to browser complete.");
-                                                    v_stream2.close();
-                                                    browser_socket2.shutdown(std::net::Shutdown::Write);
-                                                }
-                                                Err(err) => {
-                                                    println!("copy stream to browser error:{:?}", err);
-                                                }
-                                            }
-                                        });
-                                    }
-                                }
-                                Err(err) => {
-                                    eprintln!("err:{:?}",err);
-                                }
-                            }
-                        });
-
-                        println!("setup ws worker ok");
-                    }
-                    Err(er) => {
-                        eprintln!("Failed to setup ws connection: {:?}", er);
-                        self.tunnel_status = TUNNEL_DISCONNECT;
-                        // sleep(Duration::from_millis(1000 * 3)).await; // retry it
-                        continue;
-                    }
-                }
-                println!("setup ws okok.");
-            }
-            println!("await request channel");
-            // block thread
-            match self.req_recver.recv() {
-                Ok(mut request) => {
-                    println!("handle request comming");
-                    if let Some(stub) = &self.stub_client {
-                        println!("do start stream.....");
-                        let cid = stub.start_stream(request.proxy_socket.get_addr());
-                        let mut brower_proxys = browser_proxys1.lock().unwrap();
-                        request.cid = cid.clone();
-                        brower_proxys.insert(cid, Arc::new(request));
-                    }
-                }
-                Err(err) => {
-                    println!("req_recver err:{:?}",err);
-                }
-            }
-        }
         // let httpport = self.opts.listen_http_port as u16;
 
         // let proxy_server2 = proxy::new_proxy_server(&self.opts.listen_addr, httpport).unwrap();
