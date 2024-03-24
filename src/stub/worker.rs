@@ -1,9 +1,6 @@
 use log::debug;
 use std::collections::HashMap;
-use std::error::Error;
-use std::io::{self, BufRead};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{mem, thread};
 
 use std::sync::mpsc::{channel, sync_channel, Receiver, RecvError, Sender, SyncSender, TryRecvError};
@@ -23,21 +20,21 @@ pub struct PongMessage {
 }
 
 pub struct TunnelStub {
-    serizer: Arc<Box<Serializer>>,
+    serizer: Arc<Serializer>,
     tsport: Arc<Box<dyn Transport + Send + Sync>>,
     streams: Arc<Mutex<HashMap<String, Arc<VirtualStream>>>>,
-    streamch_send: Sender<Arc<VirtualStream>>,
-    fm_send: Sender<Frame>,
-    fm_recv: Receiver<Frame>,
+    streamch_send: Sender<Option<Arc<VirtualStream>>>,
+    fm_send: Sender<Option<Frame>>,
+    fm_recv: Receiver<Option<Frame>>,
     pub emiter: Arc<Mutex<EventManager<PongMessage>>>,
-    pub streamch_recv: Receiver<Arc<VirtualStream>>,
+    pub streamch_recv: Receiver<Option<Arc<VirtualStream>>>,
 }
 
 unsafe impl Send for TunnelStub {}
 unsafe impl Sync for TunnelStub {}
 
 impl TunnelStub {
-    pub fn new(tsport: Box<dyn Transport + Send + Sync>, serizer: Arc<Box<Serializer>>) -> Self {
+    pub fn new(tsport: Box<dyn Transport + Send + Sync>, serizer: Arc<Serializer>) -> Self {
         let (streamch_send, streamch_recv) = channel();
         let (fm_send, fm_recv) = channel();
 
@@ -58,10 +55,14 @@ impl TunnelStub {
     }
 
     pub fn start(&self) {
+        println!("start start!!");
         thread::scope(|s| {
             s.spawn(move || self.read_worker());
             s.spawn(move || self.write_worker());
+            println!("start after1!!");
         });
+        self.streamch_send.send(None);
+        println!("start after!!2");
     }
     fn read_worker(&self) {
         println!("read worker started");
@@ -72,20 +73,20 @@ impl TunnelStub {
                 Ok(packet) => packet,
                 Err(err) => {
                     eprintln!("Transport read packet error: {:?}", err);
-                    // let _ = mem::replace(&mut self.fm_recv, channel().1);
+                    self.fm_send.send(None).unwrap();
                     break 'read_loop;
                 }
             };
             // println!("read data==={:?}", packet);
             if let Ok(frame) = self.serizer.deserialize(&packet) {
-                debug!("TunnelStub read frame: {} {} {}", frame.cid, frame.r#type, frame.data.len());
+                // println!("TunnelStub read frame: {} {} {}", frame.cid, frame.r#type, frame.data.len());
                 if frame.r#type == PING_FRAME {
                     let mut st = frame.data.clone();
                     let data2 = get_timestamp_bytes();
                     st.extend_from_slice(&data2);
                     let cid = String::from("00000000000000000000000000000000");
                     let pong_fm = Frame::new(cid, protocol::PONG_FRAME, st);
-                    if let Err(err) = self.fm_send.send(pong_fm) {
+                    if let Err(err) = self.fm_send.send(Some(pong_fm)) {
                         eprintln!("err:{:?}", err);
                     }
                 } else if frame.r#type == PONG_FRAME {
@@ -102,10 +103,10 @@ impl TunnelStub {
                     let addr = frame.data.clone();
                     let sender = self.fm_send.clone();
                     let stream = VirtualStream::new(frame.cid.clone(), addr, sender);
-                    let st = Arc::new(stream);
                     let mut steams = self.streams.lock().unwrap();
+                    let st = Arc::new(stream);
                     steams.insert(frame.cid.clone(), st.clone());
-                    self.streamch_send.send(st).unwrap();
+                    self.streamch_send.send(Some(st)).unwrap();
                 } else if frame.r#type == EST_FRAME {
                     let stream_id = frame.cid.clone();
                     // println!("=====est frame lock start resolve 1");
@@ -113,9 +114,8 @@ impl TunnelStub {
                     // println!("=====est frame lock resolve ok 2");
                     let value = steams.get(&stream_id);
                     if let Some(st) = value {
-                        let st2: Arc<VirtualStream> = (*st).clone();
                         // println!("emit stream====={}, {}",&st2.addstr,&st2.cid);
-                        self.streamch_send.send(st2).unwrap();
+                        self.streamch_send.send(Some(st.clone())).unwrap();
                         // println!("emit stream ok");
                     }
                 } else if frame.r#type == STREAM_FRAME {
@@ -145,17 +145,25 @@ impl TunnelStub {
         'write_loop: loop {
             // block thread
             match self.fm_recv.recv() {
-                Ok(ref fm) => {
-                    let frames = split_frame(fm);
-                    for smallframe in &frames {
-                        let binary_data = self.serizer.serialize(&smallframe);
-                        debug!("TunnelStub write frame: {} {} {}", smallframe.cid, smallframe.r#type, smallframe.data.len());
-                        // println!("writeing packet ==={:?}",binary_data);
-                        if let Err(er) = self.tsport.send_packet(&binary_data) {
-                            eprintln!("Failed to send frame: {:?}", er);
+                Ok(ref ret) => {
+                    match ret {
+                        None => {
+                            // close sigle from read worker
                             break 'write_loop;
                         }
-                        // println!("write packet completed");
+                        Some(fm) => {
+                            let frames = split_frame(fm);
+                            for smallframe in &frames {
+                                let binary_data = self.serizer.serialize(&smallframe);
+                                debug!("TunnelStub write frame: {} {} {}", smallframe.cid, smallframe.r#type, smallframe.data.len());
+                                // println!("writeing packet ==={:?}",binary_data);
+                                if let Err(er) = self.tsport.send_packet(&binary_data) {
+                                    eprintln!("Failed to send frame: {:?}", er);
+                                    break 'write_loop;
+                                }
+                                // println!("write packet completed");
+                            }
+                        }
                     }
                 }
 
@@ -174,11 +182,10 @@ impl TunnelStub {
         let data = &addr[..addrlen];
         let sender = self.fm_send.clone();
         let stream = VirtualStream::new(cid.to_owned(), data.to_vec(), sender);
-        let st = Arc::new(stream);
         let mut steams = self.streams.lock().unwrap();
-        steams.insert(cid.clone(), st);
+        steams.insert(cid.clone(), Arc::new(stream));
         let frame = Frame::new(cid.to_owned(), protocol::INIT_FRAME, data.to_vec());
-        self.fm_send.send(frame).unwrap();
+        self.fm_send.send(Some(frame)).unwrap();
         cid
     }
 
@@ -191,17 +198,17 @@ impl TunnelStub {
     pub fn set_ready(&self, stream: &VirtualStream) {
         let data = stream.addr.clone();
         let frame = Frame::new(stream.cid.clone(), protocol::EST_FRAME, data);
-        self.fm_send.send(frame).unwrap();
+        self.fm_send.send(Some(frame)).unwrap();
     }
 
     pub fn ping(&self) {
         let data = get_timestamp_bytes();
         let cid = String::from("00000000000000000000000000000000");
         let frame = Frame::new(cid, protocol::PING_FRAME, data);
-        self.fm_send.send(frame).unwrap();
+        self.fm_send.send(Some(frame)).unwrap();
     }
 
-    pub fn accept(&self) -> Result<Arc<VirtualStream>, RecvError> {
+    pub fn accept(&self) -> Result<Option<Arc<VirtualStream>>, RecvError> {
         self.streamch_recv.recv().map_err(|e| e.into())
     }
 }

@@ -16,7 +16,7 @@ use crate::utils::socks5::AddrInfo;
 
 pub struct BbkServer {
     opts: BbkSerOption,
-    serizer: Arc<Box<Serializer>>,
+    serizer: Arc<Serializer>,
 }
 
 impl BbkServer {
@@ -25,7 +25,7 @@ impl BbkServer {
         let serizer = Serializer::new(&opts.method, &opts.password).unwrap();
         BbkServer {
             opts: opts,
-            serizer: Arc::new(Box::new(serizer)),
+            serizer: Arc::new(serizer),
         }
     }
 
@@ -59,8 +59,8 @@ impl BbkServer {
         info!("tsport:{:?}", &conn);
         let transport = TcpTransport { conn };
         // let tsport: Arc<Box<dyn Transport + Send + Sync>> = Arc::new(Box::new(tcpts));
-        let server_stub = TunnelStub::new(Box::new(transport), serizer);
-        let server_stub_arc = Arc::new(server_stub);
+        let stub_org = TunnelStub::new(Box::new(transport), serizer);
+        let server_stub_arc = Arc::new(stub_org);
         let server_stub_arc2 = server_stub_arc.clone();
         thread::spawn(move||server_stub_arc2.start());
 
@@ -69,10 +69,17 @@ impl BbkServer {
         loop {
             // println!("listen stream...");
             match server_stub_arc.streamch_recv.recv() {
-                Ok(stream) => {
-                    let server_stub_arc1 = server_stub_arc.clone();
-                    let self2 = selfshared.clone();
-                    self2.handle_stream(stream, server_stub_arc1);
+                Ok(ret) => {
+                    match ret {
+                        None=>{
+                            break;
+                        }
+                        Some(stream)=>{
+                            let server_stub_arc1 = server_stub_arc.clone();
+                            let self2 = selfshared.clone();
+                            self2.handle_stream(stream, server_stub_arc1);
+                        }
+                    }
                 }
                 Err(err) => {
                     eprintln!("err:{:?}", err);

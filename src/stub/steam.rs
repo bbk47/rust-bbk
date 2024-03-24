@@ -13,7 +13,7 @@ pub struct VirtualStream {
     pub addr: Vec<u8>,
     tx1: Sender<Vec<u8>>,
     rp1: Arc<Receiver<Vec<u8>>>,
-    sender: Sender<Frame>,
+    sender: Sender<Option<Frame>>,
     current: Vec<u8>,
     current_pos: usize,
 }
@@ -22,7 +22,7 @@ unsafe impl Sync for VirtualStream {}
 unsafe impl Send for VirtualStream {}
 
 impl VirtualStream {
-    pub fn new(cid: String, addr: Vec<u8>, sender: Sender<Frame>) -> Self {
+    pub fn new(cid: String, addr: Vec<u8>, sender: Sender<Option<Frame>>) -> Self {
         let (tx1, rp1): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = channel();
 
         let addrinfo = AddrInfo::from_buffer(&addr).unwrap();
@@ -54,7 +54,7 @@ impl VirtualStream {
 
     pub fn close_peer(&self) {
         let frame = Frame::new(self.cid.to_owned(), protocol::FIN_FRAME, vec![0x1, 0x2]);
-        self.sender.send(frame).unwrap()
+        self.sender.send(Some(frame)).unwrap()
     }
     pub fn try_clone(&self) -> Option<Self> {
         let cid = self.cid.clone();
@@ -94,6 +94,9 @@ impl Read for VirtualStream {
             // block thread
             match self.rp1.recv() {
                 Ok(b) => {
+                    if b.len()==0{
+                        return Ok(0);
+                    }
                     self.current = b;
                     self.current_pos = 0;
                 }
@@ -106,7 +109,7 @@ impl Read for VirtualStream {
 impl Write for VirtualStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let frame = Frame::new(self.cid.to_owned(), protocol::STREAM_FRAME, buf.to_vec());
-        self.sender.send(frame).unwrap();
+        self.sender.send(Some(frame)).unwrap();
         Ok(buf.len())
     }
 

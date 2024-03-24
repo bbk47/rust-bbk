@@ -52,11 +52,11 @@ pub fn forward(tcpstream: TcpStream, vstream: Arc<VirtualStream>) {
     match ret {
         Ok(_) => {
             info!("forward: copy vstream to stream complete2.");
-            tcpstream2.shutdown(std::net::Shutdown::Write);
+            tcpstream2.shutdown(std::net::Shutdown::Both).expect("exception close stream");
         }
         Err(err) => {
             error!("forward err:{:?}", err.to_string());
-            tcpstream2.shutdown(std::net::Shutdown::Both);
+            tcpstream2.shutdown(std::net::Shutdown::Both).expect("exception close stream");
         }
     }
     info!("forward=====complete....");
