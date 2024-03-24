@@ -30,7 +30,8 @@ impl BbkServer {
     }
 
     fn handle_stream(&self, stream: Arc<VirtualStream>, stub: Arc<TunnelStub>) {
-        info!("stream ===> addr:{}", &stream.addstr);
+        // info!("stream ===> addr:{}", &stream.addstr);
+        let addrstr = stream.addstr.clone();
         let addrinfo = AddrInfo::from_buffer(&stream.addr).unwrap();
         info!("REQ CONNECT=>{}", &stream.addstr);
         let socketaddr = (addrinfo.host, addrinfo.port).to_socket_addrs();
@@ -42,9 +43,10 @@ impl BbkServer {
                 let socket_addr2 = socket_addr2;
                 let conn = TcpStream::connect_timeout(&socket_addr2, Duration::from_secs(10));
                 if let Ok(socket) = conn {
-                    info!("DIAL SUCCESS==>{}", &stream.addstr);
+                    info!("DIAL SUCCESS==>{}", &addrstr);
                     stub_clone.set_ready(&stream);
-                    forward(socket, stream)
+                    forward(socket, stream);
+                    info!("CLOSE stream:{}", &addrstr);
                 }
             });
         }
@@ -59,7 +61,9 @@ impl BbkServer {
         // let tsport: Arc<Box<dyn Transport + Send + Sync>> = Arc::new(Box::new(tcpts));
         let server_stub = TunnelStub::new(Box::new(transport), serizer);
         let server_stub_arc = Arc::new(server_stub);
-        
+        let server_stub_arc2 = server_stub_arc.clone();
+        thread::spawn(move||server_stub_arc2.start());
+
         let selfshared = Arc::new(self);
         info!("exec here loop await stream===");
         loop {

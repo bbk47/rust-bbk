@@ -85,14 +85,16 @@ impl BbkClient {
         let worker_arc1 = worker_arc.clone();
         let worker_arc2 = worker_arc.clone();
         let worker_arc3 = worker_arc.clone();
+        let worker_arc4 = worker_arc.clone();
         // let proxys = self.browser_proxys.clone();
         self.stub_client = Some(worker_arc);
         info!("tunnel setup success.");
         let emiter = worker_arc1.emiter.clone();
         emiter.lock().unwrap().subscribe("pong",Box::new(|message|{
             let now = get_timestamp();
-            info!("tunnel health up:{}ms,down:{}ms,rtt:{}ms",message.atime-message.stime,now-message.atime, now-message.stime);
+            info!("tunnel health up:{}ms, down:{}ms, rtt:{}ms",message.atime-message.stime,now-message.atime, now-message.stime);
         }));
+        thread::spawn(move||worker_arc4.start());
         thread::spawn(move || loop {
             // block thread
             thread::sleep(Duration::from_millis(3000));
@@ -110,7 +112,7 @@ impl BbkClient {
                     if let Some(browser_obj) = browserobj_ret {
                         // handle brower socket to stream
                         let browser_socket1 = browser_obj.proxy_socket.conn.try_clone().unwrap();
-                        forward(browser_socket1, stream)
+                        thread::spawn(move||forward(browser_socket1, stream));
                     }
                 }
                 Err(err) => {
@@ -129,7 +131,7 @@ impl BbkClient {
                 // println!("addr:{:?}", addr.to_vec());
                 let ret: Result<utils::socks5::AddrInfo, Box<dyn Error>> = utils::socks5::AddrInfo::from_buffer(addr);
                 if let Ok(addrinfo) = ret {
-                    info!("1.CMD {}:{}",addrinfo.host,addrinfo.port);
+                    info!("1. CMD {}:{}",addrinfo.host,addrinfo.port);
                     if let Some(stub) = &stubcli {
                         let cid = stub.start_stream(request.proxy_socket.get_addr());
                         let mut brower_proxys = browser_proxys1.lock().unwrap();
@@ -149,7 +151,7 @@ impl BbkClient {
     fn service_worker(&mut self, rx: Receiver<BrowserObj>) {
         // main loop check tunnel and reconnecting
         loop {
-            info!("server worker start, tunnel status:{}", self.tunnel_status);
+            // info!("server worker start, tunnel status:{}", self.tunnel_status);
             if self.tunnel_status != TUNNEL_OK {
                 match self.setup_ws_connection() {
                     Ok(worker) => {

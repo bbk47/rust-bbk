@@ -31,7 +31,7 @@ impl VirtualStream {
         VirtualStream {
             cid,
             addr,
-            addstr,
+            addstr: addstr,
             rp1: Arc::new(rp1),
             tx1,
             sender,
@@ -46,10 +46,13 @@ impl VirtualStream {
     }
 
     pub fn close(&self) {
-        self.produce("".as_bytes())
+        self.produce("".as_bytes());
+        // drop(self.rp1);
+        // drop(self.tx1);
+        self.close_peer();
     }
 
-    pub fn close_peer(&self){
+    pub fn close_peer(&self) {
         let frame = Frame::new(self.cid.to_owned(), protocol::FIN_FRAME, vec![0x1, 0x2]);
         self.sender.send(frame).unwrap()
     }
