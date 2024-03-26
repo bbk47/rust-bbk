@@ -8,7 +8,7 @@ use crate::protocol::{self, Frame};
 use crate::utils::socks5::AddrInfo;
 
 pub struct VirtualStream {
-    pub cid: String,
+    pub cid:String,
     pub addstr: String,
     pub addr: Vec<u8>,
     tx1: Sender<Vec<u8>>,
@@ -53,7 +53,7 @@ impl VirtualStream {
     }
 
     pub fn close_peer(&self) {
-        let frame = Frame::new(self.cid.to_owned(), protocol::FIN_FRAME, vec![0x1, 0x2]);
+        let frame = Frame::new(self.cid.clone(), protocol::FIN_FRAME, vec![0x1, 0x2]);
         self.sender.send(Some(frame)).unwrap()
     }
     pub fn try_clone(&self) -> Option<Self> {

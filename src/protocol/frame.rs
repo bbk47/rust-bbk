@@ -30,12 +30,7 @@ pub struct Frame {
 impl Frame {
     pub fn new(cid: String, r#type: u8, data: Vec<u8>) -> Frame {
         let version = 0x1;
-        Frame {
-            version,
-            cid,
-            r#type,
-            data,
-        }
+        Frame { version, cid, r#type, data }
     }
 }
 
@@ -43,8 +38,8 @@ impl Frame {
  *
  * // required: cid, type,  data
  * @param {*} frame
- * |<-version[1]->|<--cidLen[1]-->|<---(cid)---->|<--type[1]-->|<--dataLen[2]-->|<-------data------>|
- * |-----s1 ------|-------s2------|-----s3 ------|-------s4----|-------s5 ------|--------s6---------|
+ * |<-----mask(random)----->|<-version[1]->|<--type[1]-->|<---cid--->|<-------data------>|
+ * |---------2--------------|------ 1 -----|-------1-----|-----32-----|-------------------|
  * @returns
  */
 
@@ -52,14 +47,14 @@ impl Frame {
 pub fn encode(frame: &Frame) -> Vec<u8> {
     // get the version, CID length and data length
     let version = frame.version;
-    let cid_len = frame.cid.len();
     let data_len = frame.data.len();
 
     // create buffers for each part of the frame
-    let mut ver_buf = vec![version];
-    let mut cid_len_buf = vec![];
-    cid_len_buf.extend_from_slice(&(cid_len as u8).to_be_bytes());
-    let cid_buf = frame.cid.as_bytes().to_vec();
+    let mut data_buf = vec![];
+    let ver_buf = vec![version];
+    let cid_buf =  frame.cid.as_bytes().to_vec();
+    
+    
     let type_buf = vec![frame.r#type];
     let mut data_len_buf = vec![];
     if data_len <= u16::MAX as usize {
@@ -67,45 +62,32 @@ pub fn encode(frame: &Frame) -> Vec<u8> {
     } else {
         panic!("Data too long!");
     }
+    let mut rng = rand::thread_rng();
+    let random_bytes: [u8; 2] = rng.gen();
 
-    ver_buf.extend(cid_len_buf); //2
-    ver_buf.extend(cid_buf); // 32
-    ver_buf.extend(type_buf); // 1
-    ver_buf.extend(data_len_buf); // 2
-    ver_buf.extend(&frame.data); //
-                                 // concatenate all the buffers together to produce the binary data
-    ver_buf
+    data_buf.extend(random_bytes); //2
+    data_buf.extend(ver_buf); // 1
+    data_buf.extend(type_buf); // 1
+    data_buf.extend(cid_buf); // 32
+    data_buf.extend(&frame.data); //
+                                  // concatenate all the buffers together to produce the binary data
+    data_buf
 }
 
 // decode decodes the given binary data into a frame
 pub fn decode(binary_data: &[u8]) -> Result<Frame, String> {
     // check if the binary data has at least 6 bytes
-    if binary_data.len() < 6 {
+    if binary_data.len() < 8 {
         return Err("Invalid binary data length1".to_string());
     }
 
     // extract the version, CID length, CID buffer, type, and data length from the binary data
-    let version = binary_data[0];
-    let cid_len = binary_data[1] as usize;
-    if binary_data.len() < cid_len + 5 {
-        return Err("Invalid binary data length2".to_string());
-    }
-    let cid_buf = String::from_utf8_lossy(&binary_data[2..cid_len + 2]).to_string();
-    let r#type = binary_data[cid_len + 2];
-    let data_len = (binary_data[cid_len + 3] as usize) << 8 | (binary_data[cid_len + 4] as usize);
-
-    // check if the binary data has enough bytes to hold the specified data length
-    let data_start = cid_len + 5;
-    // println!("data_start:{}, data_len:{}", data_start, data_len);
-    if binary_data.len() < data_start + data_len {
-        return Err("Invalid binary data length3".to_string());
-    }
-
-    // extract the data buffer from the binary data
-    let data = binary_data[data_start..data_start + data_len].to_vec();
-
+    let version = binary_data[2];
+    let r#type = binary_data[3];
+    let cid = String::from_utf8_lossy(&binary_data[4..36]).to_string();
+    let data = &binary_data[36..];
     // create a new frame with the extracted information
-    let frame = Frame::new(cid_buf, r#type, data);
+    let frame = Frame::new(cid, r#type, data.to_vec());
 
     Ok(frame)
 }
