@@ -1,7 +1,12 @@
 use clap::Parser;
 use colored::*;
 use regex::Regex;
-use std::{fmt::Debug, io::Write};
+use std::{
+    fmt::Debug,
+    fs::File,
+    io::{BufReader, Read, Write},
+    path::Path,
+};
 
 use env_logger::{Builder, Env};
 use log::{Level, LevelFilter};
@@ -76,14 +81,27 @@ fn main() {
         // We are reusing `anstyle` but there are `anstyle-*` crates to adapt it to your
         // preferred styling crate.
 
-        let mut cli = client::BbkClient::new(bbkopts);
+        let cli = client::BbkClient::new(bbkopts);
         cli.bootstrap()
     } else {
-        let bbkopts: option::BbkSerOption = serde_json::from_str(&fscontent).unwrap();
+        let mut bbkopts: option::BbkSerOption = serde_json::from_str(&fscontent).unwrap();
         let jsonstr = serde_json::to_string_pretty(&bbkopts).unwrap();
         println!("bbkopts:\n{}!", jsonstr);
 
-        let mut svc = server::BbkServer::new(bbkopts);
+        bbkopts.ssl_crt = readfile_as_str(&bbkopts.ssl_crt).to_string();
+        bbkopts.ssl_key = readfile_as_str(&bbkopts.ssl_key).to_string();
+        let svc = server::BbkServer::new(bbkopts);
         svc.bootstrap()
     }
+}
+
+fn readfile_as_str(filepath: &str) -> String {
+    // 打开文件
+    let mut file = File::open(Path::new(filepath)).expect("无法打开文件");
+
+    // 创建一个空的 String 类型的缓冲区
+    let mut buffer = String::new();
+    // 读取文件内容到缓冲区
+    file.read_to_string(&mut buffer).expect("读取文件失败");
+    buffer
 }

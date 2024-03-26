@@ -1,9 +1,5 @@
 use std::{
-    io,
-    net::TcpStream,
-    sync::Arc,
-    thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    error::Error, fmt, io, net::TcpStream, sync::Arc, thread, time::{Duration, SystemTime, UNIX_EPOCH}
 };
 
 use log::{error, info};
@@ -15,6 +11,21 @@ pub mod emiter;
 pub mod encrypt;
 pub mod socks5;
 pub mod uuid;
+
+
+#[derive(Debug)]
+pub struct MyError {
+    pub message: String,
+}
+
+impl Error for MyError {}
+
+impl fmt::Display for MyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
 
 pub fn get_timestamp() -> i64 {
     let current_time = SystemTime::now().duration_since(UNIX_EPOCH).expect("Failed to get current time");

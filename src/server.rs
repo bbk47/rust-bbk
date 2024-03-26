@@ -1,5 +1,7 @@
 use log::{info, trace, warn};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::cell::UnsafeCell;
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::process::exit;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{io, thread};
@@ -10,7 +12,7 @@ use crate::serve::{FrameServer, TunnelConn};
 
 use crate::serializer::Serializer;
 use crate::stub::{TunnelStub, VirtualStream};
-use crate::transport::{self, TcpTransport, Transport};
+use crate::transport::{self, TcpTransport, TlsTransport, Transport, WsTransport};
 use crate::utils::forward;
 use crate::utils::socks5::AddrInfo;
 
@@ -52,35 +54,55 @@ impl BbkServer {
         }
     }
 
-    fn listen_tunnel(&self, tun: TunnelConn) {
-        let serizer = self.serizer.clone();
+    fn get_tunnel_stub(&self, wmode: &str, tun: TunnelConn)->Option<TunnelStub> {
         // let tsport = wrap_tunnel(tunconn);
-        let conn = tun.tcp_socket.try_clone().unwrap();
-        info!("tsport:{:?}", &conn);
-        let transport = TcpTransport { conn };
-        // let tsport: Arc<Box<dyn Transport + Send + Sync>> = Arc::new(Box::new(tcpts));
-        let stub_org = TunnelStub::new(Box::new(transport), serizer);
+        let serizer = self.serizer.clone();
+        match &wmode[..] {
+            "tcp" => {
+                let conn = tun.tcp_socket.unwrap().try_clone().unwrap();
+                let transport = TcpTransport { conn };
+                let stub_org = TunnelStub::new(Box::new(transport), serizer);
+                Some(stub_org)
+            }
+            "tls" => {
+                let conn = tun.tls_socket.unwrap();
+                let transport = TlsTransport { conn:UnsafeCell::new(conn) };
+                let stub_org = TunnelStub::new(Box::new(transport), serizer);
+                Some(stub_org)
+            }
+            "ws" => {
+                let conn = tun.websocket.unwrap();
+                let transport = WsTransport { conn:UnsafeCell::new(conn) };
+                let stub_org = TunnelStub::new(Box::new(transport), serizer);
+                Some(stub_org)
+            }
+            _=>None
+        }
+     
+    }
+    fn listen_tunnel(&self, tun: TunnelConn) {
+        
+        let stub_org = self.get_tunnel_stub(&self.opts.work_mode, tun).unwrap();
+
         let server_stub_arc = Arc::new(stub_org);
         let server_stub_arc2 = server_stub_arc.clone();
-        thread::spawn(move||server_stub_arc2.start());
+        thread::spawn(move || server_stub_arc2.start());
 
         let selfshared = Arc::new(self);
         info!("exec here loop await stream===");
         loop {
             // println!("listen stream...");
             match server_stub_arc.streamch_recv.recv() {
-                Ok(ret) => {
-                    match ret {
-                        None=>{
-                            break;
-                        }
-                        Some(stream)=>{
-                            let server_stub_arc1 = server_stub_arc.clone();
-                            let self2 = selfshared.clone();
-                            self2.handle_stream(stream, server_stub_arc1);
-                        }
+                Ok(ret) => match ret {
+                    None => {
+                        break;
                     }
-                }
+                    Some(stream) => {
+                        let server_stub_arc1 = server_stub_arc.clone();
+                        let self2 = selfshared.clone();
+                        self2.handle_stream(stream, server_stub_arc1);
+                    }
+                },
                 Err(err) => {
                     eprintln!("err:{:?}", err);
                 }
@@ -88,19 +110,10 @@ impl BbkServer {
         }
     }
 
-    fn init_server(&self) {
-        if self.opts.listen_port <= 1024 && self.opts.listen_port >= 65535 {
-            panic!("invalid port: {}", self.opts.listen_port);
-        }
-        let port = self.opts.listen_port as u16;
-        let addr = format!("{}:{}", &self.opts.listen_addr, &port);
-        // let server = serve::new_abc_tcp_server(&self.opts.listen_addr, port).unwrap();
-        let server = serve::AbcTcpServer::new(&self.opts.listen_addr, port).unwrap();
-
-        info!("server listen on {:?}", server.get_addr());
+    fn listen_server(&self, mut server: Box<dyn FrameServer>) {
         thread::scope(|s| {
-            // 这里是需要异步执行的代码
-            for tunnel in server {
+            loop {
+                let tunnel = server.accept();
                 match tunnel {
                     Ok(tun) => {
                         // 对新连接进行处理
@@ -114,6 +127,39 @@ impl BbkServer {
                 }
             }
         });
+    }
+
+    fn init_server(&self) {
+        if self.opts.listen_port <= 1024 && self.opts.listen_port >= 65535 {
+            panic!("invalid port: {}", self.opts.listen_port);
+        }
+        let port = self.opts.listen_port as u16;
+        let addr = format!("{}:{}", &self.opts.listen_addr, &port);
+        info!("server listen on {:?} mode:{}", &addr, &self.opts.mode);
+        let listener = TcpListener::bind(&addr).expect("listen addr error!");
+        // let server = serve::new_abc_tcp_server(&self.opts.listen_addr, port).unwrap();
+        match &self.opts.work_mode[..] {
+            "tcp" => {
+                let server = serve::AbcTcpServer::new(listener);
+                self.listen_server(Box::new(server));
+            }
+            "tls" => {
+                let server = serve::AbsTlsServer::new(listener,&self.opts.ssl_crt,&self.opts.ssl_key);
+                self.listen_server(Box::new(server));
+            }
+            "ws" => {
+                let server = serve::AbcWssServer::new(listener);
+                self.listen_server(Box::new(server));
+            }
+            "h2" => {
+                let server = serve::AbcHttp2Server::new(listener);
+                self.listen_server(Box::new(server));
+            }
+            _ => {
+                eprintln!("Unsupport mode");
+                exit(-1);
+            }
+        };
     }
 
     pub fn bootstrap(&self) {

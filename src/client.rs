@@ -12,12 +12,12 @@ use std::{io, mem, println, thread};
 
 use crate::serializer::Serializer;
 use crate::stub::{TunnelStub, VirtualStream};
-use crate::utils::{forward, get_timestamp};
+use crate::utils::{forward, get_timestamp, MyError};
 use crate::{proxy, stub, utils};
 
 use crate::option::{BbkCliOption, TunnelOpts};
 use crate::proxy::{ProxyServer, ProxySocket};
-use crate::transport::{self, create_transport, Transport};
+use crate::transport::{self, Transport};
 
 const TUNNEL_INIT: u8 = 0x1;
 const TUNNEL_OK: u8 = 0x2;
@@ -57,20 +57,33 @@ impl BbkClient {
     fn setup_ws_connection(&self) -> Result<stub::TunnelStub, Box<dyn Error>> {
         let tun_opts = self.tunnel_opts.clone();
         info!("creating {} tunnel", tun_opts.protocol);
-        let result: Result<stub::TunnelStub, retry::Error<_>> = retry(Exponential::from_millis(10).map(jitter).take(3), || match create_transport(&tun_opts) {
-            Ok(tsport) => {
-                let stub: stub::TunnelStub = stub::TunnelStub::new(tsport, self.serizer.clone());
-                return Ok(stub);
+        let tunport: u16 = tun_opts.port.parse()?;
+        // 根据字符串构造一个 Box<dyn Error>
+        let err_message: &'static str = "Something went wrong";
+        let err = Box::<dyn Error>::from(MyError { message: err_message.to_string() });
+        match &tun_opts.protocol[..] {
+            "tcp" => {
+                let ts = transport::new_tcp_transport(&tun_opts.host, tunport)?;
+                let stub = stub::TunnelStub::new(ts, self.serizer.clone());
+                Ok(stub)
             }
-            Err(err) => {
-                return Err(err);
+            "tls" => {
+                let ts = transport::new_tls_transport(&tun_opts.host, tunport)?;
+                let stub = stub::TunnelStub::new(ts, self.serizer.clone());
+                Ok(stub)
             }
-        });
-
-        if result.is_err() {
-            return Err("Failed to create tunnel".into());
+            "ws" => {
+                let ts = transport::new_websocket_transport(&tun_opts.host, tunport, &tun_opts.path, tun_opts.secure)?;
+                let stub = stub::TunnelStub::new(ts, self.serizer.clone());
+                Ok(stub)
+            }
+            "h2" => {
+                let ts = transport::new_tls_transport(&tun_opts.host, tunport)?;
+                let stub = stub::TunnelStub::new(ts, self.serizer.clone());
+                Ok(stub)
+            }
+            _ => Err(err),
         }
-        Ok(result.unwrap())
     }
     fn listen_stream(&self, worker: TunnelStub) {
         let worker_arc = Arc::new(worker);
@@ -79,7 +92,7 @@ impl BbkClient {
         let worker_arc4 = worker_arc.clone();
         let bproxys = self.browser_proxys.clone();
         let mut stubwriter = self.stub_client.write().unwrap();
-        *stubwriter=Some(worker_arc);
+        *stubwriter = Some(worker_arc);
         mem::drop(stubwriter);
         info!("tunnel setup success.");
         let emiter = worker_arc1.emiter.clone();
@@ -110,7 +123,7 @@ impl BbkClient {
                                 let browser_socket1 = browser_obj.proxy_socket.conn.try_clone().unwrap();
                                 thread::spawn(move || {
                                     forward(browser_socket1, vstream1.clone());
-                                    info!("3.CLOSE stream:{}",&vstream1.addstr);
+                                    info!("3.CLOSE stream:{}", &vstream1.addstr);
                                 });
                             }
                         }
@@ -140,8 +153,7 @@ impl BbkClient {
         }
     }
 
-    
-    fn keep_ping(&self ) {
+    fn keep_ping(&self) {
         loop {
             // println!("keep_ping");
             // block thread
@@ -189,9 +201,9 @@ impl BbkClient {
         info!("Proxy server listening on {}", proxy_server.get_addr());
         return proxy_server;
     }
-    fn init_socks5_server(&self ) {
+    fn init_socks5_server(&self) {
         let server = self.get_tcp_server(self.opts.listen_port);
-       
+
         server.listen_conn(|tcpstream| {
             // Handle incoming connections here
             match proxy::socks5::new_socks5_proxy(tcpstream) {
@@ -209,7 +221,7 @@ impl BbkClient {
             };
         });
     }
-    fn init_connect_server(&self ) {
+    fn init_connect_server(&self) {
         let server = self.get_tcp_server(self.opts.listen_http_port);
         server.listen_conn(|tcpstream| {
             // Handle incoming connections here

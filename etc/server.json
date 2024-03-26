@@ -5,7 +5,7 @@
   "logLevel": "info",
   "method": "aes-256-cfb",
   "password": "p@ssword",
-  "workMode": "tcp",
+  "workMode": "ws",
   "sslCrt":"./examples/tls/certs/cert.pem",
   "sslKey":"./examples/tls/certs/key.pem",
   "workPath": "/websocket"

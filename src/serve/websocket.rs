@@ -1,42 +1,42 @@
-use std::any::Any;
 use std::error::Error;
-use std::net::TcpListener;
-use std::sync::{Arc, Mutex};
 
-use super::base::{FrameServer, TunnelConn};
-use std::result::Result;
+use std::net::{TcpListener, TcpStream};
 
-const NTHREADS: usize = 8;
+use tungstenite::{accept, accept_hdr};
 
+use super::base::FrameServer;
+use super::TunnelConn;
+
+// TCP 监听器
 pub struct AbcWssServer {
     listener: TcpListener,
 }
 
-impl FrameServer for AbcWssServer {
-    fn listen_conn(&self) -> Result<(), Box<dyn Error>> {
-        // let shared_handler = Arc::new(Mutex::new(handler));
-        // thread::spawn( move {
-        //     loop {
-        //         let (stream, addr) = self.listener.accept().await?;
-        //         let shared_handler = shared_handler.clone();
-        //         let tunnel_conn = TunnelConn::new("tcp".to_owned(), stream);
-        //         thread::spawn( move {
-        //             let handler = shared_handler.lock().unwrap();
-        //             handler(&tunnel_conn);
-        //         });
-        //     }
-        // });
-        Ok(())
-    }
-
-    fn get_addr(&self) -> String {
-        format!("tcp://{}", self.listener.local_addr().unwrap())
+impl AbcWssServer {
+    pub fn new(ln: TcpListener) -> AbcWssServer {
+        AbcWssServer { listener: ln }
     }
 }
 
-pub fn new_abc_wss_server(host: &str, port: u16, path: &str) -> Result<Box<dyn FrameServer>, Box<dyn Error>> {
-    let addr = format!("{}:{}", host, port);
-    let listener = TcpListener::bind(addr)?;
-    let server = AbcWssServer { listener };
-    Ok(Box::new(server) as Box<dyn FrameServer>)
+impl FrameServer for AbcWssServer {
+    fn get_addr(&self) -> String {
+        format!("tcp://{}", self.listener.local_addr().unwrap())
+    }
+
+    fn accept(&mut self) -> Result<TunnelConn, Box<dyn Error>> {
+        match self.listener.accept() {
+            Ok((stream, _addr)) => {
+                let mut wssss = accept(stream)?;
+                let tuntype: String = String::from("ws");
+                let tuncon = TunnelConn {
+                    tuntype,
+                    websocket: Some(wssss),
+                    tcp_socket: None,
+                    tls_socket: None,
+                };
+                Ok(tuncon)
+            }
+            Err(e) => Err(Box::new(e)),
+        }
+    }
 }

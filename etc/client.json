@@ -5,7 +5,7 @@
   "listenHttpPort": 1087,
   "logLevel": "info",
   "tunnelOpts": {
-    "protocol": "tcp",
+    "protocol": "ws",
     "secure": false,
     "host": "127.0.0.1",
     "port": "5900",

@@ -1,16 +1,13 @@
 use std::io::{Error, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
 
 use super::base::Transport;
 
-#[derive(Debug)]
 pub struct TcpTransport {
     pub conn: TcpStream,
 }
 
 unsafe impl Sync for TcpTransport {}
-
 unsafe impl Send for TcpTransport {}
 
 impl Transport for TcpTransport {
@@ -37,14 +34,9 @@ impl Transport for TcpTransport {
     }
 
     fn close(&self) -> Result<(), Error> {
-        println!("close transport");
+        println!("close tcp transport");
         self.conn.shutdown(std::net::Shutdown::Both)?;
         Ok(())
     }
 }
 
-pub fn new_tcp_transport(host: &str, port: u16) -> Result<TcpTransport, Error> {
-    let socket_addr = (host, port).to_socket_addrs()?.next().unwrap();
-    let conn = TcpStream::connect_timeout(&socket_addr, Duration::from_secs(10))?;
-    Ok(TcpTransport { conn })
-}
