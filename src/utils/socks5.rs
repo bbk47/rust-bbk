@@ -1,7 +1,6 @@
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::println;
 use std::str::FromStr;
 
 #[derive(Debug)]
@@ -52,6 +51,20 @@ impl AddrInfo {
 
             _ => Err(Box::new(InvalidAddressType)),
         }
+    }
+}
+
+/// Returns the on-the-wire byte length of the SOCKS5 address at the start of
+/// `buf` (ATYP + ADDR + PORT), or None if the buffer is too short / invalid.
+pub fn socks5_addr_len(buf: &[u8]) -> Option<usize> {
+    match buf.first()? {
+        1 => Some(1 + 4 + 2),
+        4 => Some(1 + 16 + 2),
+        3 => {
+            let domain_len = *buf.get(1)? as usize;
+            Some(1 + 1 + domain_len + 2)
+        }
+        _ => None,
     }
 }
 

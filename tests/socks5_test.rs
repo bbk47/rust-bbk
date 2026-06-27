@@ -1,8 +1,4 @@
-#[path = "../src/utils/socks5.rs"]
-mod socks5;
-
-use socks5::build_socks5_buffer;
-use socks5::AddrInfo;
+use bbk::utils::socks5::{build_socks5_buffer, socks5_addr_len, AddrInfo};
 use std::net::Ipv6Addr;
 
 #[test]
@@ -68,4 +64,32 @@ fn build_socks5_buffer_ipv6() {
 fn build_socks5_buffer_domain() {
     let buffer = build_socks5_buffer("www.example.com", 32896).unwrap();
     assert_eq!(buffer, [3, 15, 119, 119, 119, 46, 101, 120, 97, 109, 112, 108, 101, 46, 99, 111, 109, 0x80, 0x80,]);
+}
+
+#[test]
+fn socks5_addr_len_matches_build() {
+    // The reported length must equal the actual encoded address length, so the
+    // UDP relay can split `[addr][payload]` records correctly.
+    for (host, port) in [("127.0.0.1", 80u16), ("::ffff:7f00:1", 1), ("www.example.com", 443)] {
+        let buf = build_socks5_buffer(host, port).unwrap();
+        assert_eq!(socks5_addr_len(&buf), Some(buf.len()), "host={host}");
+    }
+}
+
+#[test]
+fn socks5_addr_len_with_trailing_payload() {
+    // ipv4 address (7 bytes) followed by a UDP payload: only the address counts.
+    let mut buf = build_socks5_buffer("10.0.0.1", 9100).unwrap();
+    let addr_len = buf.len();
+    buf.extend_from_slice(b"PAYLOAD");
+    assert_eq!(socks5_addr_len(&buf), Some(addr_len));
+    // Parsing only the address slice must recover the correct port.
+    let info = AddrInfo::from_buffer(&buf[..addr_len]).unwrap();
+    assert_eq!(info, AddrInfo { host: "10.0.0.1".to_owned(), port: 9100 });
+}
+
+#[test]
+fn socks5_addr_len_invalid() {
+    assert_eq!(socks5_addr_len(&[]), None);
+    assert_eq!(socks5_addr_len(&[5, 0, 0]), None);
 }

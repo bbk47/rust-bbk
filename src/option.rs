@@ -27,8 +27,11 @@ pub struct BbkSerOption {
     pub method: String,
     pub password: String,
     pub work_mode: String,
+    #[serde(default)]
     pub work_path: String,
+    #[serde(default)]
     pub ssl_crt: String,
+    #[serde(default)]
     pub ssl_key: String,
 }
 

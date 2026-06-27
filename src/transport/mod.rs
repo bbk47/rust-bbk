@@ -1,67 +1,57 @@
-mod base;
-// mod http2;
-mod tcp;
-mod tls;
-mod websocket;
+use std::io;
+use std::time::Duration;
 
-use tungstenite::client;
-use url::Url;
+use tokio::net::TcpStream;
+use tokio_native_tls::TlsStream;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
-use std::{
-    cell::UnsafeCell, error::Error, net::{TcpStream, ToSocketAddrs}, time::Duration
-};
+pub mod h2conn;
 
-pub use base::Transport;
-use native_tls::TlsConnector;
-pub use tcp::TcpTransport;
-pub use tls::TlsTransport;
-use tungstenite::connect;
-pub use websocket::WsTransport;
-pub use websocket::WssTransport;
+pub use h2conn::H2Conn;
 
-// pub fn wrap_tunnel(tunnel: &server::TunnelConn) -> Box<dyn Transport> {
-//     match tunnel.tuntype.as_str() {
-//         "ws" => Box::new(WebsocketTransport { conn: tunnel.wsocket.clone() }),
-//         "h2" => Box::new(Http2Transport { h2socket: tunnel.h2socket.clone() }),
-//         "tcp" => Box::new(TcpTransport {
-//             conn: tunnel.tcpsocket.try_clone().unwrap(),
-//         }),
-//         _ => Box::new(TlsTransport {
-//             conn: tunnel.tcpsocket.try_clone().unwrap(),
-//         }),
-//     }
-// }
-
-// pub fn create_transport(tun_opts: &TunnelOpts) -> Result<Box<dyn Transport + Send + Sync>, Box<dyn Error>> {
-//     let tunport:u16= tun_opts.port.parse()?;
-//     let tsport=new_tcp_transport(&tun_opts.host,tunport)?;
-
-//     Ok(Box::new(tsport))
-// }
-
-pub fn new_tcp_transport(host: &str, port: u16) -> Result<Box<dyn Transport + Send + Sync>, Box<dyn Error>> {
-    let socket_addr = (host, port).to_socket_addrs()?.next().unwrap();
-    let conn = TcpStream::connect_timeout(&socket_addr, Duration::from_secs(10))?;
-    let ts = TcpTransport { conn };
-    Ok(Box::new(ts))
+fn io_other<E: std::fmt::Display>(e: E) -> io::Error {
+    io::Error::new(io::ErrorKind::Other, e.to_string())
 }
 
-pub fn new_tls_transport(host: &str, port: u16) -> Result<Box<dyn Transport + Send + Sync>, Box<dyn Error>> {
-    // let remote_addr = format!("{}:{}", host, port);
-    let connector = TlsConnector::new().unwrap();
-    let stream = TcpStream::connect(format!("{}:{}", host, port))?;
-    let stream = connector.connect(host, stream)?;
-    let ts = TlsTransport { conn: UnsafeCell::new(stream) };
-    Ok(Box::new(ts))
+/// Raw TCP carrier (no application framing).
+pub async fn dial_tcp(host: &str, port: &str) -> io::Result<TcpStream> {
+    let addr = format!("{}:{}", host, port);
+    let fut = TcpStream::connect(addr);
+    let conn = tokio::time::timeout(Duration::from_secs(10), fut)
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "tcp dial timeout"))??;
+    conn.set_nodelay(true).ok();
+    Ok(conn)
 }
 
-pub fn new_websocket_transport(host: &str, port: u16, path: &str, secure: bool) -> Result<Box<dyn Transport + Send + Sync>, Box<dyn Error>> {
-    let ws_url = if secure { format!("wss://{}{}", host, path) } else { format!("ws://{}:{}{}", host, port, path) };
-    println!("transport wsurl: {}", ws_url);
-    let (socket, _) = connect(Url::parse(&ws_url).unwrap())?;
-    Ok(Box::new(WssTransport { conn: UnsafeCell::new(socket) }))
+/// Raw TLS carrier. Certificates are not verified, matching Go's
+/// `InsecureSkipVerify: true`.
+pub async fn dial_tls(host: &str, port: &str) -> io::Result<TlsStream<TcpStream>> {
+    let tcp = dial_tcp(host, port).await?;
+    let connector = native_tls::TlsConnector::builder()
+        .danger_accept_invalid_certs(true)
+        .danger_accept_invalid_hostnames(true)
+        .build()
+        .map_err(io_other)?;
+    let connector = tokio_native_tls::TlsConnector::from(connector);
+    let tls = connector.connect(host, tcp).await.map_err(io_other)?;
+    Ok(tls)
 }
 
-// fn new_http2_transport(host: &str, port: &str, path: &str) -> Result<Http2Transport, Box<dyn Error>> {
-//     Err(format!("Unexpected stream status: {},{},{},{}",host,port,path, 101).into())
-// }
+/// Raw WebSocket carrier. Wrap the returned stream in `tunnel::WsConn`.
+pub async fn dial_ws(
+    host: &str,
+    port: &str,
+    path: &str,
+    secure: bool,
+) -> io::Result<WebSocketStream<MaybeTlsStream<TcpStream>>> {
+    let url = if secure {
+        format!("wss://{}:{}{}", host, port, path)
+    } else {
+        format!("ws://{}:{}{}", host, port, path)
+    };
+    let req = url.into_client_request().map_err(io_other)?;
+    let (ws, _resp) = connect_async(req).await.map_err(io_other)?;
+    Ok(ws)
+}

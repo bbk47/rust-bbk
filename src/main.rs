@@ -1,35 +1,17 @@
 use clap::Parser;
 use colored::*;
 use regex::Regex;
-use std::{
-    fmt::Debug,
-    fs::File,
-    io::{BufReader, Read, Write},
-    path::Path,
-};
+use std::fs;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::Path;
 
-use env_logger::{Builder, Env};
+use env_logger::Builder;
 use log::{Level, LevelFilter};
 
-use std::{
-    fs,
-    sync::{Arc, Mutex},
-};
+use bbk::{client, option, server};
 
-mod protocol;
-// 目录模块
-mod proxy;
-mod serializer;
-mod serve;
-mod stub;
-mod transport;
-mod utils;
-// 文件模块
-mod client;
-mod option;
-mod server;
-
-/// bbk is a tunnel for bypass firewall
+/// bbk is a tunnel for bypassing firewalls.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
@@ -37,7 +19,9 @@ pub struct Args {
     #[arg(short, long)]
     pub config: String,
 }
-fn main() {
+
+#[tokio::main]
+async fn main() {
     let args = Args::parse();
     if args.config.is_empty() {
         println!("config file is missing!");
@@ -58,50 +42,44 @@ fn main() {
         .filter(None, LevelFilter::Info)
         .init();
 
-    // let s = String::from("hello world");
-
-    // let hello = &s[0..5];
-    // let world = &s[6..11];
     let fscontent = match fs::read_to_string(&args.config) {
         Ok(ret) => ret,
-        Err(e) => panic!("read config file  failed: {:?}", e),
+        Err(e) => panic!("read config file failed: {:?}", e),
     };
 
-    let re = Regex::new(r"\x22mode\x22:\s\x22(client|server)").unwrap();
-    let m = match re.find(&fscontent) {
-        Some(s) => s,
+    let re = Regex::new(r#""mode":\s*"(client|server)""#).unwrap();
+    let caps = match re.captures(&fscontent) {
+        Some(c) => c,
         None => panic!("invalid mode in config file!"),
     };
-    let retstr = m.as_str();
-    let mode = &retstr[9..];
+    let mode = &caps[1];
+
     if mode == "client" {
         let bbkopts: option::BbkCliOption = serde_json::from_str(&fscontent).unwrap();
         let jsonstr = serde_json::to_string_pretty(&bbkopts).unwrap();
-        println!("bbkopts:\n{}!", jsonstr);
-        // We are reusing `anstyle` but there are `anstyle-*` crates to adapt it to your
-        // preferred styling crate.
+        println!("bbkopts:\n{}", jsonstr);
 
         let cli = client::BbkClient::new(bbkopts);
-        cli.bootstrap()
+        cli.bootstrap().await;
     } else {
         let mut bbkopts: option::BbkSerOption = serde_json::from_str(&fscontent).unwrap();
         let jsonstr = serde_json::to_string_pretty(&bbkopts).unwrap();
-        println!("bbkopts:\n{}!", jsonstr);
+        println!("bbkopts:\n{}", jsonstr);
 
-        bbkopts.ssl_crt = readfile_as_str(&bbkopts.ssl_crt).to_string();
-        bbkopts.ssl_key = readfile_as_str(&bbkopts.ssl_key).to_string();
+        if !bbkopts.ssl_crt.is_empty() {
+            bbkopts.ssl_crt = readfile_as_str(&bbkopts.ssl_crt);
+        }
+        if !bbkopts.ssl_key.is_empty() {
+            bbkopts.ssl_key = readfile_as_str(&bbkopts.ssl_key);
+        }
         let svc = server::BbkServer::new(bbkopts);
-        svc.bootstrap()
+        svc.bootstrap().await;
     }
 }
 
 fn readfile_as_str(filepath: &str) -> String {
-    // 打开文件
-    let mut file = File::open(Path::new(filepath)).expect("无法打开文件");
-
-    // 创建一个空的 String 类型的缓冲区
+    let mut file = File::open(Path::new(filepath)).expect("cannot open file");
     let mut buffer = String::new();
-    // 读取文件内容到缓冲区
-    file.read_to_string(&mut buffer).expect("读取文件失败");
+    file.read_to_string(&mut buffer).expect("read file failed");
     buffer
 }

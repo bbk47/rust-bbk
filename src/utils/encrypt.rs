@@ -1,99 +1,137 @@
-use openssl::symm::{decrypt, encrypt, Cipher};
-use std::error::Error;
+use openssl::hash::{Hasher, MessageDigest};
+use openssl::symm::{Cipher, Crypter, Mode};
 
-
-macro_rules! impl_aes_encryptor {
-    ($name:ident, $cipher:expr) => {
-        struct $name {
-            key: Vec<u8>,
-            iv: Vec<u8>,
-        }
-
-        impl $name {
-            fn new(password: &str) -> Self {
-                let key_len = $cipher.key_len();
-                let iv_len = $cipher.iv_len().unwrap();
-                let (key, iv) = evp_bytes_to_key(&password, key_len, iv_len);
-                // println!("key:{},iv:{}", hex::encode(&key), hex::encode(&iv));
-                $name { key, iv }
-            }
-        }
-
-        impl EncryptorImpl for $name {
-            fn encrypt(&self, data: &mut Vec<u8>) -> Result<(), Box<dyn Error>> {
-                let encrypted = encrypt($cipher, &self.key, Some(&self.iv), data)?;
-                // Add padding to match the behavior of OpenSSL's EVP_*_encrypt functions
-                // let block_size = $cipher.block_size();
-                // let pad_len = block_size - (encrypted.len() % block_size);
-                // encrypted.extend(vec![pad_len as u8; pad_len]);
-                *data = encrypted;
-                Ok(())
-            }
-
-            fn decrypt(&self, data: &mut Vec<u8>) -> Result<(), Box<dyn Error>> {
-                let decrypted = decrypt($cipher, &self.key, Some(&self.iv), data)?;
-                // Remove padding added during encryption
-                // let pad_len = decrypted.last().cloned().unwrap_or(0) as usize;
-                // if pad_len >= $cipher.block_size() || decrypted.len() < pad_len {
-                //     return Err("Invalid padding length".into());
-                // }
-                // decrypted.truncate(decrypted.len() - pad_len);
-                *data = decrypted;
-                Ok(())
-            }
-        }
-    };
+/// Cipher family selected by the configured `method`. Mirrors the methods
+/// supported by the Go `bbk47/toolbox` package so the wire format matches.
+#[derive(Clone, Copy)]
+enum Kind {
+    /// AES style cipher that takes the connection IV directly.
+    Iv,
+    /// rc4-md5 family: stream key = md5(evp_key || connection_iv), no IV on the cipher.
+    Rc4Md5,
 }
 
-impl_aes_encryptor!(Aes128CfbEncryptor, Cipher::aes_128_cfb128());
-impl_aes_encryptor!(Aes192CfbEncryptor, Cipher::aes_192_cfb128());
-impl_aes_encryptor!(Aes256CfbEncryptor, Cipher::aes_256_cfb128());
-impl_aes_encryptor!(Aes128CbcEncryptor, Cipher::aes_128_cbc());
-impl_aes_encryptor!(Aes192CbcEncryptor, Cipher::aes_192_cbc());
-impl_aes_encryptor!(Aes256CbcEncryptor, Cipher::aes_256_cbc());
-impl_aes_encryptor!(Aes128CtrEncryptor, Cipher::aes_128_ctr());
-impl_aes_encryptor!(Aes192CtrEncryptor, Cipher::aes_192_ctr());
-impl_aes_encryptor!(Aes256CtrEncryptor, Cipher::aes_256_ctr());
-
+/// Holds the password-derived key material plus the cipher selection. One
+/// `Encryptor` is created per tunnel; each connection then derives fresh
+/// per-connection enc/dec streams from random IVs (see `tunnel::SecureConn`).
+#[derive(Clone)]
 pub struct Encryptor {
-    impl_: Box<dyn EncryptorImpl>,
+    kind: Kind,
+    cipher: Cipher,
+    key: Vec<u8>,
+    iv_len: usize,
 }
 
 impl Encryptor {
-    pub fn new(method: &str, password: &str) -> Self {
-        let impl_: Box<dyn EncryptorImpl> = match method {
-            "aes-128-cfb" => Box::new(Aes128CfbEncryptor::new(password)),
-            "aes-192-cfb" => Box::new(Aes192CfbEncryptor::new(password)),
-            "aes-256-cfb" => Box::new(Aes256CfbEncryptor::new(password)),
-            "aes-128-cbc" => Box::new(Aes128CbcEncryptor::new(password)),
-            "aes-192-cbc" => Box::new(Aes192CbcEncryptor::new(password)),
-            "aes-256-cbc" => Box::new(Aes256CbcEncryptor::new(password)),
-            "aes-128-ctr" => Box::new(Aes128CtrEncryptor::new(password)),
-            "aes-192-ctr" => Box::new(Aes192CtrEncryptor::new(password)),
-            "aes-256-ctr" => Box::new(Aes256CtrEncryptor::new(password)),
-            _ => unimplemented!(),
+    pub fn new(method: &str, password: &str) -> Result<Self, String> {
+        let (kind, cipher, key_len, iv_len): (Kind, Cipher, usize, usize) = match method {
+            "aes-128-cfb" => (Kind::Iv, Cipher::aes_128_cfb128(), 16, 16),
+            "aes-192-cfb" => (Kind::Iv, Cipher::aes_192_cfb128(), 24, 16),
+            "aes-256-cfb" => (Kind::Iv, Cipher::aes_256_cfb128(), 32, 16),
+            "aes-128-ctr" => (Kind::Iv, Cipher::aes_128_ctr(), 16, 16),
+            "aes-192-ctr" => (Kind::Iv, Cipher::aes_192_ctr(), 24, 16),
+            "aes-256-ctr" => (Kind::Iv, Cipher::aes_256_ctr(), 32, 16),
+            "rc4-md5" => (Kind::Rc4Md5, Cipher::rc4(), 16, 16),
+            "rc4-md5-6" => (Kind::Rc4Md5, Cipher::rc4(), 16, 6),
+            _ => return Err(format!("unsupported method: {}", method)),
         };
-        Encryptor { impl_ }
+        let (key, _iv) = evp_bytes_to_key(password, key_len, iv_len);
+        Ok(Encryptor { kind, cipher, key, iv_len })
     }
 
-    pub fn encrypt(&self, data: &mut Vec<u8>) -> Result<(), Box<dyn Error>> {
-        self.impl_.encrypt(data)
+    /// Length of the random IV exchanged at the start of each connection.
+    pub fn iv_len(&self) -> usize {
+        self.iv_len
     }
 
-    pub fn decrypt(&self, data: &mut Vec<u8>) -> Result<(), Box<dyn Error>> {
-        self.impl_.decrypt(data)
+    pub fn new_enc_stream(&self, iv: &[u8]) -> Result<StreamCrypter, String> {
+        self.new_stream(Mode::Encrypt, iv)
+    }
+
+    pub fn new_dec_stream(&self, iv: &[u8]) -> Result<StreamCrypter, String> {
+        self.new_stream(Mode::Decrypt, iv)
+    }
+
+    fn new_stream(&self, mode: Mode, iv: &[u8]) -> Result<StreamCrypter, String> {
+        let inner = match self.kind {
+            Kind::Iv => {
+                let crypter = Crypter::new(self.cipher, mode, &self.key, Some(iv)).map_err(|e| e.to_string())?;
+                Inner::Ossl { crypter, block_size: self.cipher.block_size().max(1) }
+            }
+            // rc4-md5: stream key = md5(evp_key || connection_iv). RC4 lives in
+            // OpenSSL 3's legacy provider (often unavailable with a static build),
+            // so use a self-contained RC4 to stay wire-compatible with Go.
+            Kind::Rc4Md5 => {
+                let mut material = self.key.clone();
+                material.extend_from_slice(iv);
+                Inner::Rc4(Rc4::new(&md5sum(&material)))
+            }
+        };
+        Ok(StreamCrypter { inner })
     }
 }
 
-trait EncryptorImpl:Send +Sync+ 'static  {
-    fn encrypt(&self, data: &mut Vec<u8>) -> Result<(), Box<dyn Error>>;
-    fn decrypt(&self, data: &mut Vec<u8>) -> Result<(), Box<dyn Error>>;
+/// A continuous stream cipher. Successive `xor` calls keep advancing the same
+/// keystream, exactly like Go's `cipher.Stream.XORKeyStream`.
+pub struct StreamCrypter {
+    inner: Inner,
 }
 
+enum Inner {
+    Ossl { crypter: Crypter, block_size: usize },
+    Rc4(Rc4),
+}
 
+impl StreamCrypter {
+    /// Transforms `input` and returns the result. Length is preserved for the
+    /// stream ciphers we use (CFB/CTR/RC4 emit one output byte per input byte).
+    pub fn xor(&mut self, input: &[u8]) -> Result<Vec<u8>, String> {
+        match &mut self.inner {
+            Inner::Ossl { crypter, block_size } => {
+                let mut out = vec![0u8; input.len() + *block_size];
+                let n = crypter.update(input, &mut out).map_err(|e| e.to_string())?;
+                out.truncate(n);
+                Ok(out)
+            }
+            Inner::Rc4(rc4) => Ok(rc4.apply(input)),
+        }
+    }
+}
 
-use openssl::hash::{Hasher, MessageDigest};
-use std::collections::VecDeque;
+/// Standard RC4 stream cipher (matches Go's `crypto/rc4`). Symmetric: the same
+/// routine encrypts and decrypts.
+struct Rc4 {
+    s: [u8; 256],
+    i: u8,
+    j: u8,
+}
+
+impl Rc4 {
+    fn new(key: &[u8]) -> Self {
+        let mut s = [0u8; 256];
+        for (i, b) in s.iter_mut().enumerate() {
+            *b = i as u8;
+        }
+        let mut j = 0u8;
+        for i in 0..256 {
+            j = j.wrapping_add(s[i]).wrapping_add(key[i % key.len()]);
+            s.swap(i, j as usize);
+        }
+        Rc4 { s, i: 0, j: 0 }
+    }
+
+    fn apply(&mut self, input: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(input.len());
+        for &b in input {
+            self.i = self.i.wrapping_add(1);
+            self.j = self.j.wrapping_add(self.s[self.i as usize]);
+            self.s.swap(self.i as usize, self.j as usize);
+            let k = self.s[(self.s[self.i as usize].wrapping_add(self.s[self.j as usize])) as usize];
+            out.push(b ^ k);
+        }
+        out
+    }
+}
 
 fn md5sum(d: &[u8]) -> Vec<u8> {
     let mut hasher = Hasher::new(MessageDigest::md5()).unwrap();
@@ -101,28 +139,21 @@ fn md5sum(d: &[u8]) -> Vec<u8> {
     hasher.finish().unwrap().to_vec()
 }
 
+/// OpenSSL-compatible EVP_BytesToKey using MD5 (matches Go toolbox key derivation).
 pub fn evp_bytes_to_key(password: &str, key_len: usize, iv_len: usize) -> (Vec<u8>, Vec<u8>) {
     let md5_len = 16;
     let total = key_len + iv_len;
-    let mut ret = vec![0; total];
     let pass_byte = password.as_bytes();
-    // let mut temp_buf = vec![0; md5_len + pass_byte.len()];
 
-    let mut last = md5sum(pass_byte);
-    let mut offset = 0;
-    while offset < total {
-        if offset == 0 {
-            last = md5sum(pass_byte);
-        } else {
-            let mut deque = VecDeque::with_capacity(last.len() + pass_byte.len());
-            deque.extend(last.iter());
-            deque.extend(pass_byte.iter());
-            let concatenated = deque.into_iter().collect::<Vec<u8>>();
-            last = md5sum(&concatenated);
-        }
-        let len = std::cmp::min(md5_len, total - offset);
-        ret[offset..offset + len].copy_from_slice(&last[..len]);
-        offset += md5_len;
+    let mut ret: Vec<u8> = Vec::with_capacity(total + md5_len);
+    let mut last: Vec<u8> = Vec::new();
+    while ret.len() < total {
+        let mut input = Vec::with_capacity(last.len() + pass_byte.len());
+        input.extend_from_slice(&last);
+        input.extend_from_slice(pass_byte);
+        last = md5sum(&input);
+        ret.extend_from_slice(&last);
     }
+    ret.truncate(total);
     (ret[..key_len].to_vec(), ret[key_len..].to_vec())
 }

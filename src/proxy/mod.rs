@@ -1,39 +1,40 @@
-use std::net::{TcpListener, TcpStream};
+use std::future::Future;
+use std::io;
 
-mod base;
-pub mod connect;    // 查找当前目录下的connect.rs或者connect目录下的mod.rs
-pub mod socks5;    // 查找当前目录下的socks5.rs或者socks5目录下的mod.rs
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
-pub use base::ProxySocket;
+pub mod connect;
+pub mod socks5;
+pub mod udprelay;
 
-pub struct ProxyServer {
-    addr: String,
-    ln: TcpListener,
+pub use udprelay::{client_udp, is_udp_marker, serve_udp, udp_marker};
+
+/// Result of a local proxy handshake: either a plain TCP target to relay, or a
+/// SOCKS5 UDP association.
+pub enum Inbound {
+    /// TCP CONNECT: the accepted socket plus the SOCKS5-encoded target address.
+    Tcp(TcpStream, Vec<u8>),
+    /// SOCKS5 UDP ASSOCIATE.
+    Udp(Socks5UdpProxy),
 }
 
-impl ProxyServer {
-    pub fn listen_conn<F>(&self, mut handler: F)
-    where
-        F: FnMut(TcpStream),
-    {
-        for stream in self.ln.incoming() {
-            if let Ok(stream) = stream {
-                handler(stream);
-            }
-        }
-    }
-
-   pub fn get_addr(&self) -> &str {
-        &self.addr
-    }
+/// Holds the SOCKS5 control TCP connection and the relay UDP socket.
+pub struct Socks5UdpProxy {
+    pub ctrl: TcpStream,
+    pub udp: UdpSocket,
 }
 
-pub fn new_proxy_server(host: &str, port: u16) -> std::io::Result<ProxyServer> {
-    let address = format!("{}:{}", host, port);
-    let listener = TcpListener::bind(address)?;
-    let addr_str = format!("tcp://{}", listener.local_addr()?);
-    Ok(ProxyServer {
-        addr: addr_str,
-        ln: listener,
-    })
+/// Accepts connections on `host:port`, invoking `handler` per connection.
+pub async fn listen<H, F>(host: &str, port: u16, handler: H) -> io::Result<()>
+where
+    H: Fn(TcpStream) -> F + Clone + Send + 'static,
+    F: Future<Output = ()> + Send + 'static,
+{
+    let ln = TcpListener::bind(format!("{}:{}", host, port)).await?;
+    loop {
+        let (sock, _) = ln.accept().await?;
+        sock.set_nodelay(true).ok();
+        let handler = handler.clone();
+        tokio::spawn(handler(sock));
+    }
 }
